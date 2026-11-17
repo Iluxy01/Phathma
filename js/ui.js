@@ -79,6 +79,7 @@ export function renderJournal() {
   // задания
   const gh = G.ghost;
   let html = `<h3>Дело</h3><div class="obj">Имя призрака: <b>${gh.fullName}</b>, возраст при смерти: ${gh.age}</div>`;
+  html += '<div class="obj">В доме спрятан проклятый предмет. Он может многое рассказать о призраке — но дорого обойдётся.</div>';
   html += '<h3>Задания</h3>';
   html += `<div class="obj ${G.journal.guess ? 'done' : ''}">${G.journal.guess ? '✓' : '○'} Определить тип призрака (выбрать в журнале)</div>`;
   for (const o of G.objectives) html += `<div class="obj ${G.done[o.id] ? 'done' : ''}">${G.done[o.id] ? '✓' : '○'} ${o.text}</div>`;

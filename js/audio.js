@@ -480,6 +480,52 @@ export const sfx = {
     voice(g, t + 0.1, { f0: f0 * 0.8, f0End: f0 * 1.25, dur: rnd(0.7, 1.1), vowels: [vs[Math.floor(rnd(0, 5))], vs[Math.floor(rnd(0, 5))], vs[Math.floor(rnd(0, 5))]], vol: 0.8, vib: 3, rasp: 0.9 });
     nz(d, t, { buf: PINK, f: 2000, q: 0.6, dur: 1.4, a: 0.3, vol: 0.12 });
   },
+  musicBox(x, z, dur = 9) {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(x, z, 0.8, 1.6);
+    const mel = [659, 784, 880, 784, 659, 587, 523, 587, 659, 659, 587, 523, 494, 523, 440];
+    let tt = t;
+    mel.forEach((f, i) => {
+      const slow = 1 + i / mel.length * 0.8; // заводная пружина ослабевает
+      const ff = f * (1 - i * 0.002);
+      osc(d, tt, { f: ff, dur: 0.9, a: 0.003, vol: 0.12 });
+      osc(d, tt, { f: ff * 2.01, dur: 0.4, a: 0.003, vol: 0.04 });
+      osc(d, tt, { type: 'triangle', f: ff * 3.98, dur: 0.15, a: 0.002, vol: 0.02 });
+      tt += 0.42 * slow;
+      if (tt - t > dur) return;
+    });
+    for (let i = 0; i < 30; i++) nz(d, t + i * 0.3, { type: 'highpass', f: 5000, dur: 0.01, vol: 0.03 });
+  },
+  scrape(x, z) {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(x, z, 0.8, 0.8);
+    for (let i = 0; i < 4; i++) nz(d, t + i * 0.45, { buf: PINK, f: rnd(600, 1200), fEnd: rnd(400, 1500), q: 3, dur: 0.4, a: 0.05, vol: 0.35 });
+  },
+  needle(x, z) {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(x, z, 0.8, 0.6);
+    nz(d, t, { buf: PINK, type: 'lowpass', f: 800, dur: 0.18, a: 0.02, vol: 0.4 });
+    osc(d, t + 0.1, { f: 2400, fEnd: 1800, dur: 0.12, vol: 0.05 });
+  },
+  cardFlip() {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(undefined, undefined, 0, 0.4);
+    nz(d, t, { type: 'highpass', f: 2500, fEnd: 6000, dur: 0.09, vol: 0.4 });
+    osc(d, t + 0.05, { f: 220, fEnd: 110, dur: 1.5, a: 0.3, vol: 0.06 });
+  },
+  whoosh() {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(undefined, undefined, 0, 1);
+    nz(d, t, { buf: PINK, f: 300, fEnd: 2000, q: 1, dur: 0.6, a: 0.25, vol: 0.4 });
+  },
+  curse() {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(undefined, undefined, 0, 2.5);
+    osc(d, t, { f: 38, fEnd: 22, dur: 3, a: 0.05, vol: 1.4 });
+    nz(d, t, { buf: BROWN, type: 'lowpass', f: 300, dur: 2.5, a: 0.8, vol: 1.2 });
+    [1, 1.19, 1.41].forEach(k => osc(d, t, { type: 'sawtooth', f: 110 * k, fEnd: 55 * k, dur: 2.2, a: 0.6, vol: 0.06 }));
+    for (let i = 0; i < 8; i++) nz(d, t + rnd(0, 0.5), { f: rnd(2000, 6000), q: 8, dur: 0.3, vol: 0.15 });
+  },
   cricket(x, z) {
     if (!ctx) return;
     const t = ctx.currentTime, d = route(x, z, 0.1, 0.5, false);

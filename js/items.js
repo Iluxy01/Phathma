@@ -1,7 +1,7 @@
 // Снаряжение: модели, использование, установка, показания
 import * as THREE from 'three';
 import { G, rand, pick, toast, completeObjective, clamp } from './state.js';
-import { roomAt, roomLit, pointBlocked, segBlocked, collideCircle, colliders, mat, box, interactables } from './world.js';
+import { roomAt, roomLit, pointBlocked, segBlocked, collideCircle, colliders, surfaceAt, solidAt, inVanArea, mat, box, interactables } from './world.js';
 import { sfx, setStatic, speak } from './audio.js';
 
 export const ITEM_DEFS = {
@@ -35,10 +35,59 @@ export const saltPiles = [];
 let scene = null, camera = null;
 let nextId = 1;
 
-export function initItems(sc, cam) {
+export function initItems(sc, cam, rackSlots) {
   scene = sc; camera = cam;
   G.stock = {};
   for (const k in ITEM_DEFS) G.stock[k] = ITEM_DEFS[k].stock;
+  if (rackSlots) buildRack(rackSlots);
+}
+
+// ---------- стеллаж в фургоне ----------
+const rack = {};
+function buildRack(slots) {
+  Object.keys(ITEM_DEFS).forEach((type, i) => {
+    const sl = slots[i];
+    if (!sl) return;
+    const dummy = { type, def: ITEM_DEFS[type], data: {}, charges: 1 };
+    const g = buildMesh(dummy);
+    if (type === 'candle') g.children[g.children.length - 1].visible = false;
+    g.scale.setScalar(2.1);
+    g.rotation.y = -Math.PI / 2;
+    g.position.set(sl.x, 0, sl.z);
+    scene.add(g);
+    g.updateMatrixWorld(true);
+    box3.setFromObject(g);
+    g.position.y = sl.y - box3.min.y;
+    // ярлык с названием и количеством
+    const c = document.createElement('canvas'); c.width = 256; c.height = 48;
+    const tex = new THREE.CanvasTexture(c);
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(0.44, 0.083), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+    label.position.set(sl.x + 0.12, sl.y - 0.09, sl.z);
+    label.rotation.y = Math.PI / 2;
+    scene.add(label);
+    // невидимая зона захвата на всю ячейку
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.42, 0.46), new THREE.MeshBasicMaterial({ visible: false }));
+    hit.position.set(sl.x, sl.y + 0.2, sl.z);
+    scene.add(hit);
+    const all = [g, label, hit];
+    for (const o of all) o.traverse(m => { m.userData.kind = 'rackItem'; m.userData.type = type; });
+    interactables.push(g, label, hit);
+    rack[type] = { g, c, tex };
+  });
+  refreshRack();
+}
+
+export function refreshRack() {
+  for (const type in rack) {
+    const r = rack[type], n = G.stock[type], x = r.c.getContext('2d');
+    x.clearRect(0, 0, 256, 48);
+    x.fillStyle = n ? '#e8e2cf' : '#5a5a5a'; x.fillRect(0, 4, 256, 40);
+    x.fillStyle = '#1a1a1a'; x.font = 'bold 22px sans-serif';
+    x.fillText(ITEM_DEFS[type].name.slice(0, 15), 8, 32);
+    x.fillStyle = n ? '#2a6a3a' : '#7a2a2a'; x.fillText('×' + n, 210, 32);
+    r.tex.needsUpdate = true;
+    r.g.visible = n > 0;
+  }
 }
 
 // ---------- текстуры ----------
@@ -263,6 +312,8 @@ export function takeFromStock(type) {
   G.inv[slot] = createItem(type);
   G.sel = slot;
   attachHeld();
+  refreshRack();
+  sfx.click();
   return true;
 }
 
@@ -271,8 +322,10 @@ export function returnToStock(slot) {
   if (!it) return;
   if (!it.data.used) G.stock[it.type]++;
   if (it.mesh.parent) it.mesh.parent.remove(it.mesh);
+  if (it.type === 'box') setStatic(false);
   G.inv[slot] = null;
   attachHeld();
+  refreshRack();
 }
 
 function removeFromInv(it) {
@@ -287,7 +340,11 @@ function placePos(dist = 0.65) {
   const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
   let x = p.x + fx * dist, z = p.z + fz * dist;
   if (segBlocked(p.x, p.z, x, z)) { x = p.x + fx * 0.3; z = p.z + fz * 0.3; }
-  return collideCircle(x, z, 0.15);
+  // на невысокую мебель (стол, тумба, кровать) можно поставить сверху
+  const top = surfaceAt(x, z);
+  if (top > 0 && top < 1.3 && !solidAt(x, z, top + 0.01, 0.0)) return { x, z, y: top };
+  const r = collideCircle(x, z, 0.15);
+  return { x: r.x, z: r.z, y: 0 };
 }
 
 // звук удара предмета о пол
@@ -302,9 +359,9 @@ export function placeSelectedNeat() {
   const p = G.player;
   if (p.hidden) { toast('Нельзя положить в шкафу'); return; }
   if (it.type === 'box') setStatic(false);
-  const { x, z } = placePos();
+  const { x, z, y } = placePos();
   removeFromInv(it);
-  placeItem(it, x, z, p.yaw);
+  placeItem(it, x, z, p.yaw, false, y);
   sfx.impact(x, z, IMPACT[it.type] || 'plastic', 0.3);
 }
 
@@ -316,6 +373,11 @@ export function dropSelected() {
   if (!it) return;
   const p = G.player;
   if (p.hidden) { toast('Нельзя положить в шкафу'); return; }
+  if (inVanArea(p.x, p.z)) {
+    returnToStock(G.sel);
+    toast(it.data.used ? 'Использованный предмет выброшен' : 'Возвращено на стеллаж');
+    return;
+  }
   if (it.type === 'box') setStatic(false);
   if (it.type === 'video' || it.type === 'laser') { placeSelectedNeat(); return; }
   if (it.mesh.parent === camera) it.mesh.getWorldPosition(tmpW);
@@ -334,35 +396,29 @@ export function dropSelected() {
   });
 }
 
-function wallHit(x, z, r) {
-  for (const c of colliders) {
-    if (c.kind === 'furn') continue;
-    if (c.kind === 'door' && c.door.angle >= 0.35) continue;
-    if (x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r) return true;
-  }
-  return false;
-}
-
 function updateFlying(dt) {
   for (let i = flying.length - 1; i >= 0; i--) {
     const f = flying[i], m = f.it.mesh;
     f.vy -= 9.8 * dt;
+    const bottom = f.y - 0.04;
     let nx = f.x + f.vx * dt, nz = f.z + f.vz * dt;
-    if (wallHit(nx, f.z, 0.06)) { f.vx *= -0.35; nx = f.x; }
-    if (wallHit(f.x, nz, 0.06)) { f.vz *= -0.35; nz = f.z; }
+    if (solidAt(nx, f.z, bottom, 0.06)) { f.vx *= -0.35; nx = f.x; }
+    if (solidAt(f.x, nz, bottom, 0.06)) { f.vz *= -0.35; nz = f.z; }
     f.x = nx; f.z = nz; f.y += f.vy * dt;
     m.rotation.x += f.sx * dt; m.rotation.y += f.sy * dt; m.rotation.z += f.sz * dt;
-    if (f.y <= 0.06 && f.vy < 0) {
+    const floor = surfaceAt(f.x, f.z, bottom);
+    if (f.y <= floor + 0.05 && f.vy < 0) {
       const speed = Math.hypot(f.vx, f.vy, f.vz);
       sfx.impact(f.x, f.z, IMPACT[f.it.type] || 'plastic', speed);
       if (Math.abs(f.vy) > 1.5 && f.bounces < 2) {
-        f.bounces++; f.y = 0.06; f.vy = -f.vy * 0.3; f.vx *= 0.5; f.vz *= 0.5;
+        f.bounces++; f.y = floor + 0.05; f.vy = -f.vy * 0.3; f.vx *= 0.5; f.vz *= 0.5;
         f.sx *= 0.5; f.sz *= 0.5;
       } else {
         flying.splice(i, 1);
         scene.remove(m);
-        const r = collideCircle(f.x, f.z, 0.15);
-        placeItem(f.it, r.x, r.z, m.rotation.y, true);
+        let x = f.x, z = f.z;
+        if (floor === 0) { const r = collideCircle(f.x, f.z, 0.12); x = r.x; z = r.z; }
+        placeItem(f.it, x, z, m.rotation.y, true, floor);
         continue;
       }
     }
@@ -371,7 +427,7 @@ function updateFlying(dt) {
 }
 
 const box3 = new THREE.Box3();
-export function placeItem(it, x, z, yaw, lying = false) {
+export function placeItem(it, x, z, yaw, lying = false, baseY = 0) {
   it.placed = true;
   it.x = x; it.z = z;
   it.room = roomAt(x, z);
@@ -398,12 +454,13 @@ export function placeItem(it, x, z, yaw, lying = false) {
   scene.add(m);
   m.updateMatrixWorld(true);
   box3.setFromObject(m);
-  m.position.y = 0.022 - box3.min.y; // поверх ковров
+  m.position.y = baseY + (baseY > 0 ? 0.002 : 0.022) - box3.min.y; // поверх ковров / столешницы
+  it.y = baseY;
   if (it.type === 'video') {
     it.cam = new THREE.PerspectiveCamera(70, 1.6, 0.05, 30);
-    it.cam.position.set(x, 0.6, z); it.cam.rotation.set(0, yaw, 0, 'YXZ');
+    it.cam.position.set(x, baseY + 0.6, z); it.cam.rotation.set(0, yaw, 0, 'YXZ');
     it.cam.layers.enable(2);
-    m.position.y = 0.5; // на штативе
+    m.position.y = baseY + 0.5; // на штативе
     if (!it.data.tripod) {
       it.data.tripod = new THREE.Group();
       for (let i = 0; i < 3; i++) {
@@ -414,7 +471,7 @@ export function placeItem(it, x, z, yaw, lying = false) {
         it.data.tripod.add(leg);
       }
     }
-    it.data.tripod.position.set(x, 0, z);
+    it.data.tripod.position.set(x, baseY, z);
     scene.add(it.data.tripod);
     it.data.tripod.traverse(o => { o.userData.kind = 'item'; o.userData.item = it; });
   }

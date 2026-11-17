@@ -6,6 +6,7 @@ import { initAudio, sfx, setWindIndoor, suspendAudio, setStatic, setHuntAudio, u
 import * as I from './items.js';
 import { Ghost, GHOSTS } from './ghost.js';
 import * as UI from './ui.js';
+import * as CU from './cursed.js';
 import { view, toLogical, deltaLogical, initScreen, setOrient, openLayoutEditor, initLayoutEditor, joyOnRight } from './screen.js';
 
 const $ = (id) => document.getElementById(id);
@@ -35,12 +36,13 @@ const photoLight = new THREE.PointLight(0xffffff, 0, 12, 1.2);
 camera.add(photoLight);
 
 W.buildWorld(scene);
-I.initItems(scene, camera);
+I.initItems(scene, camera, W.van.rackSlots);
 
 // случайный призрак
 const forced = new URLSearchParams(location.search).get('ghost');
 const def = GHOSTS.find(g => g.id === forced) || pick(GHOSTS);
 G.ghost = new Ghost(scene, def);
+CU.spawnCursed(scene, new URLSearchParams(location.search).get('cursed'));
 
 // дополнительные задания
 const OBJ = [
@@ -52,6 +54,7 @@ const OBJ = [
   { id: 'motion', text: 'Засечь призрака датчиком движения' },
   { id: 'salt', text: 'Призрак должен наступить на соль' },
   { id: 'survive', text: 'Пережить охоту' },
+  { id: 'cursed', text: 'Воспользоваться проклятым предметом' },
 ];
 G.objectives = OBJ.sort(() => Math.random() - 0.5).slice(0, 3);
 
@@ -188,6 +191,7 @@ let target = null;
 function findTarget() {
   const p = G.player;
   if (p.hidden) return { kind: 'unhide', label: 'Выйти из шкафа' };
+  if (CU.mirrorActive()) return { kind: 'cursed', label: CU.cursedPrompt() };
   ray.setFromCamera(center, camera);
   const hits = ray.intersectObjects(W.interactables, true);
   for (const h of hits) {
@@ -206,6 +210,11 @@ function findTarget() {
       case 'hide': return { kind: 'hide', spot: u.spot, label: 'Спрятаться в шкаф' };
       case 'item': if (u.item.placed) return { kind: 'item', item: u.item, label: 'Взять: ' + u.item.def.name }; break;
       case 'rack': return { kind: 'rack', label: 'Снаряжение' };
+      case 'cursed': return { kind: 'cursed', label: CU.cursedPrompt() };
+      case 'rackItem': {
+        const n = G.stock[u.type], d = I.ITEM_DEFS[u.type];
+        return { kind: 'rackItem', type: u.type, label: n ? `Взять: ${d.name} (${n} шт.)` : `${d.name}: закончились` };
+      }
       case 'vjournal': return { kind: 'vjournal', label: 'Журнал' };
       case 'leave': return { kind: 'leave', label: 'Завершить расследование' };
     }
@@ -249,6 +258,8 @@ function interact() {
     }
     case 'item': I.pickup(t.item); break;
     case 'rack': UI.openScreen('vanMenu'); break;
+    case 'rackItem': I.takeFromStock(t.type); break;
+    case 'cursed': CU.useCursed(); break;
     case 'vjournal': UI.openScreen('journal'); break;
     case 'leave': {
       const g = GHOSTS.find(x => x.id === G.journal.guess);
@@ -275,7 +286,7 @@ function updatePlayer(dt) {
   const len = Math.hypot(mx, mz);
   if (len > 1) { mx /= len; mz /= len; }
   const wantSprint = sprintToggle || k.ShiftLeft || k.ShiftRight;
-  p.moving = len > 0.15 && !p.hidden && !G.uiOpen;
+  p.moving = len > 0.15 && !p.hidden && !G.uiOpen && !CU.mirrorActive();
   let speed = 1.6;
   if (p.moving && wantSprint && p.stamina > 0 && !p.exhausted) {
     speed = 2.9; p.stamina -= dt;
@@ -427,7 +438,7 @@ $('btnStart').addEventListener('click', () => {
     const el = document.documentElement;
     if (el.requestFullscreen && matchMedia('(pointer: coarse)').matches) el.requestFullscreen().then(() => screen.orientation?.lock?.('landscape').catch(() => {})).catch(() => {});
   } catch (_) { /* */ }
-  toast('Возьмите снаряжение в фургоне (стойка слева)', 4);
+  toast('Возьмите снаряжение со стеллажа слева. «Положить» в фургоне — вернуть на место', 5);
   last = performance.now();
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
@@ -475,6 +486,7 @@ function frame(now) {
     W.updateProps(dt);
     W.updateLights(G.t);
     I.updateItems(dt);
+    CU.updateCursed(dt);
     updateEffects(dt);
     // сердцебиение при охоте рядом
     const gh = G.ghost;
@@ -496,7 +508,14 @@ function frame(now) {
   updateAudio(dt);
   renderMonitor();
   if (G.pendingPhoto) { G.pendingPhoto = false; takePhotoNow(); }
-  renderer.render(scene, camera);
+  const mc = CU.viewCamera(view.w / view.h);
+  if (mc) {
+    // зеркальце показывает комнату призрака в холодном призрачном свете
+    const ai = W.ambient.intensity, ac = W.ambient.color.getHex(), fl = flash.intensity;
+    W.ambient.intensity = 1.1; W.ambient.color.setHex(0x9ab4dc); flash.intensity = 0;
+    renderer.render(scene, mc);
+    W.ambient.intensity = ai; W.ambient.color.setHex(ac); flash.intensity = fl;
+  } else renderer.render(scene, camera);
 }
 W.drawSanityBoard();
 updateCamera(0);

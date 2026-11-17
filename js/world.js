@@ -382,15 +382,15 @@ export function updateLights(t) {
 }
 
 // ---------- мебель ----------
-function furn(scene, x0, z0, x1, z1, collide = true) {
-  if (collide) addCollider(x0, x1, z0, z1, 'furn');
+function furn(scene, x0, z0, x1, z1, top = 1, levels = null) {
+  addCollider(x0, x1, z0, z1, 'furn', { top, levels });
 }
 
 function table(scene, cx, cz, w, d, color = 0x7a5432, h = 0.76) {
   box(w, 0.06, d, color, cx, h, cz, scene);
   const lx = w / 2 - 0.08, lz = d / 2 - 0.08;
   for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) box(0.06, h, 0.06, color, cx + sx * lx, h / 2, cz + sz * lz, scene);
-  furn(scene, cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2);
+  furn(scene, cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2, h + 0.03);
   return h + 0.03;
 }
 function chair(scene, cx, cz, face, color = 0x6a4a2e) {
@@ -410,7 +410,7 @@ function bed(scene, cx, cz, w, l, color = 0x8a3a3a, rot = 0) {
   box(w, 0.9, 0.06, 0x5a3a24, 0, 0.45, -l / 2, g);
   scene.add(g);
   const hw = rot ? l / 2 : w / 2, hl = rot ? w / 2 : l / 2;
-  furn(scene, cx - hw, cz - hl, cx + hw, cz + hl);
+  furn(scene, cx - hw, cz - hl, cx + hw, cz + hl, 0.56);
 }
 function wardrobe(scene, cx, cz, rot, room) {
   const g = new THREE.Group(); g.position.set(cx, 0, cz); g.rotation.y = rot;
@@ -425,7 +425,7 @@ function wardrobe(scene, cx, cz, rot, room) {
   for (const m of [body, d1, d2]) { m.userData.kind = 'hide'; m.userData.spot = spot; interactables.push(m); }
   hideSpots.push(spot);
   const hw = rot % Math.PI ? 0.3 : 0.5, hd = rot % Math.PI ? 0.5 : 0.3;
-  furn(scene, cx - hw, cz - hd, cx + hw, cz + hd);
+  furn(scene, cx - hw, cz - hd, cx + hw, cz + hd, 2.0);
 }
 function shelf(scene, x0, z0, x1, z1, h = 1.8, color = 0x5e4a36) {
   const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, w = x1 - x0, d = z1 - z0;
@@ -437,13 +437,13 @@ function shelf(scene, x0, z0, x1, z1, h = 1.8, color = 0x5e4a36) {
     const s = rand(0.18, 0.3);
     box(s, s, Math.min(s, d - 0.05), pick([0x8a7050, 0x9a8060, 0x705a40, 0x4a5a6a]), rand(x0 + 0.2, x1 - 0.2), 0.12 + Math.floor(rand(0, 3)) * (h - 0.1) / 3 + s / 2, cz, scene);
   }
-  furn(scene, x0, z0, x1, z1);
+  furn(scene, x0, z0, x1, z1, h, [0, 1, 2, 3].map(i => 0.12 + i * (h - 0.1) / 3));
 }
 function plant(scene, x, z) {
   cyl(0.15, 0.11, 0.3, 6, 0x8a4a30, x, 0.15, z, scene);
   const leaves = new THREE.Mesh(jitter(new THREE.IcosahedronGeometry(0.3, 0), 0.06), mat(0x3a6a34));
   leaves.position.set(x, 0.6, z); scene.add(leaves);
-  furn(scene, x - 0.2, z - 0.2, x + 0.2, z + 0.2);
+  furn(scene, x - 0.2, z - 0.2, x + 0.2, z + 0.2, 0.9);
 }
 function rug(scene, cx, cz, w, d, color) {
   const m = box(w, 0.01, d, color, cx, 0.012, cz, scene);
@@ -474,8 +474,8 @@ function buildFurniture(scene) {
   // Кухня
   box(3.4, 0.9, 0.62, 0x9a9488, 1.8, 0.45, 0.42, scene);
   box(3.45, 0.05, 0.66, 0x3a3a3a, 1.8, 0.92, 0.42, scene);
-  furn(scene, 0.1, 0.1, 3.5, 0.75);
-  box(0.75, 1.9, 0.7, 0xdcdcd4, 4.1, 0.95, 0.45, scene); furn(scene, 3.72, 0.1, 4.48, 0.82);
+  furn(scene, 0.1, 0.1, 3.5, 0.75, 0.945);
+  box(0.75, 1.9, 0.7, 0xdcdcd4, 4.1, 0.95, 0.45, scene); furn(scene, 3.72, 0.1, 4.48, 0.82, 1.9);
   box(0.6, 0.05, 0.5, 0x202020, 1.0, 0.95, 0.42, scene); // плита
   let h = table(scene, 2.0, 3.0, 1.4, 0.9);
   chair(scene, 2.0, 2.3, 0); chair(scene, 2.0, 3.7, Math.PI);
@@ -486,21 +486,21 @@ function buildFurniture(scene) {
   h = table(scene, 7.5, 1.8, 2.4, 1.1, 0x5a3a20);
   chair(scene, 6.9, 1.0, 0); chair(scene, 8.1, 1.0, 0); chair(scene, 6.9, 2.6, Math.PI); chair(scene, 8.1, 2.6, Math.PI);
   addProp(scene, 'plate', 7.0, h, 1.7); addProp(scene, 'plate', 8.0, h, 1.9); addProp(scene, 'cup', 7.5, h, 1.6); addProp(scene, 'bottle', 7.6, h, 2.0);
-  box(0.5, 1.2, 1.6, 0x4e3420, 9.65, 0.6, 1.4, scene); furn(scene, 9.38, 0.6, 9.92, 2.2);
+  box(0.5, 1.2, 1.6, 0x4e3420, 9.65, 0.6, 1.4, scene); furn(scene, 9.38, 0.6, 9.92, 2.2, 1.2);
   addProp(scene, 'book', 9.65, 1.2, 1.0);
   plant(scene, 5.4, 0.4);
   // Спальня
   bed(scene, 13.5, 1.3, 1.6, 2.1, 0x7a2a3a);
   wardrobe(scene, 10.65, 0.42, 0, 'B');
-  box(0.45, 0.5, 0.45, 0x5a3a24, 15.5, 0.25, 0.5, scene); furn(scene, 15.27, 0.27, 15.92, 0.73);
+  box(0.45, 0.5, 0.45, 0x5a3a24, 15.5, 0.25, 0.5, scene); furn(scene, 15.27, 0.27, 15.92, 0.73, 0.5);
   addProp(scene, 'book', 15.5, 0.5, 0.5);
-  box(1.2, 0.85, 0.5, 0x6a4a2e, 15.2, 0.425, 3.6, scene); furn(scene, 14.6, 3.35, 15.92, 3.92);
+  box(1.2, 0.85, 0.5, 0x6a4a2e, 15.2, 0.425, 3.6, scene); furn(scene, 14.6, 3.35, 15.92, 3.92, 0.85);
   addProp(scene, 'box', 15.0, 0.85, 3.6); addProp(scene, 'cup', 15.5, 0.85, 3.6);
   rug(scene, 13.5, 3.0, 2.0, 1.2, 0x3a4a6a);
   // Ванная
-  box(1.7, 0.6, 0.85, 0xf0f0ec, 15.0, 0.3, 4.55, scene); box(1.5, 0.05, 0.65, 0x8ac0d0, 15.0, 0.58, 4.55, scene); furn(scene, 14.15, 4.1, 15.92, 4.98);
-  box(0.4, 0.4, 0.5, 0xf4f4f0, 11.9, 0.2, 4.35, scene); box(0.4, 0.4, 0.15, 0xf4f4f0, 11.9, 0.6, 4.15, scene); furn(scene, 11.68, 4.08, 12.12, 4.62);
-  box(0.6, 0.85, 0.4, 0xe8e8e4, 13.2, 0.425, 5.75, scene); furn(scene, 12.9, 5.55, 13.5, 5.95);
+  box(1.7, 0.6, 0.85, 0xf0f0ec, 15.0, 0.3, 4.55, scene); box(1.5, 0.05, 0.65, 0x8ac0d0, 15.0, 0.58, 4.55, scene); furn(scene, 14.15, 4.1, 15.92, 4.98, 0.6);
+  box(0.4, 0.4, 0.5, 0xf4f4f0, 11.9, 0.2, 4.35, scene); box(0.4, 0.4, 0.15, 0xf4f4f0, 11.9, 0.6, 4.15, scene); furn(scene, 11.68, 4.08, 12.12, 4.62, 0.42);
+  box(0.6, 0.85, 0.4, 0xe8e8e4, 13.2, 0.425, 5.75, scene); furn(scene, 12.9, 5.55, 13.5, 5.95, 0.85);
   box(0.5, 0.6, 0.02, 0xa0c8d8, 13.2, 1.5, 5.93, scene);
   addProp(scene, 'bottle', 13.0, 0.85, 5.75); addProp(scene, 'cup', 13.4, 0.85, 5.75);
   // Кладовка
@@ -509,28 +509,28 @@ function buildFurniture(scene) {
   addProp(scene, 'box', 4.5, 0, 5.75);
   // Гостиная
   rug(scene, 2.2, 7.9, 2.6, 2.2, 0x4a5a3a);
-  box(0.45, 0.5, 1.6, 0x3a3030, 0.3, 0.25, 7.8, scene); furn(scene, 0.08, 7.0, 0.53, 8.6);
+  box(0.45, 0.5, 1.6, 0x3a3030, 0.3, 0.25, 7.8, scene); furn(scene, 0.08, 7.0, 0.53, 8.6, 0.5);
   box(0.08, 0.6, 1.0, 0x101010, 0.3, 0.85, 7.8, scene); // телевизор
   const sofa = new THREE.Group(); sofa.position.set(3.4, 0, 7.8);
   box(0.9, 0.42, 1.9, 0x4a5a7a, 0, 0.21, 0, sofa); box(0.25, 0.85, 1.9, 0x4a5a7a, 0.33, 0.42, 0, sofa);
   box(0.9, 0.6, 0.2, 0x4a5a7a, 0, 0.3, 0.95, sofa); box(0.9, 0.6, 0.2, 0x4a5a7a, 0, 0.3, -0.95, sofa);
-  scene.add(sofa); furn(scene, 2.95, 6.8, 3.85, 8.8);
+  scene.add(sofa); furn(scene, 2.95, 6.8, 3.85, 8.8, 0.42);
   h = table(scene, 1.6, 7.8, 0.7, 1.0, 0x6a4a2e, 0.42);
   addProp(scene, 'cup', 1.5, h, 7.6); addProp(scene, 'book', 1.7, h, 8.0);
   shelf(scene, 4.6, 6.08, 6.6, 6.45, 1.9, 0x4a3420);
   addProp(scene, 'book', 5.2, 0.71, 6.27); addProp(scene, 'book', 6.0, 1.31, 6.27);
-  box(0.8, 0.45, 0.8, 0x7a3a2a, 5.6, 0.22, 9.35, scene); box(0.8, 0.5, 0.15, 0x7a3a2a, 5.6, 0.6, 9.7, scene); furn(scene, 5.2, 8.95, 6.0, 9.75);
+  box(0.8, 0.45, 0.8, 0x7a3a2a, 5.6, 0.22, 9.35, scene); box(0.8, 0.5, 0.15, 0x7a3a2a, 5.6, 0.6, 9.7, scene); furn(scene, 5.2, 8.95, 6.0, 9.75, 0.45);
   plant(scene, 7.6, 9.6);
   // Детская
   bed(scene, 15.2, 9.0, 1.0, 1.7, 0x3a7aa0);
   wardrobe(scene, 15.6, 6.75, -Math.PI / 2, 'C');
-  box(0.6, 0.4, 0.4, 0xc05030, 12.5, 0.2, 9.6, scene); furn(scene, 12.2, 9.38, 12.8, 9.82);
+  box(0.6, 0.4, 0.4, 0xc05030, 12.5, 0.2, 9.6, scene); furn(scene, 12.2, 9.38, 12.8, 9.82, 0.4);
   addProp(scene, 'toy', 12.4, 0.4, 9.6); addProp(scene, 'toy', 12.7, 0.4, 9.6);
   h = table(scene, 12.0, 7.0, 0.8, 0.6, 0xe0d0a0, 0.5);
   addProp(scene, 'cup', 12.0, h, 7.0); addProp(scene, 'toy', 11.8, h, 7.1);
   rug(scene, 12.8, 8.2, 1.6, 1.6, 0xd08aa0);
   // Коридор
-  box(0.35, 0.8, 0.9, 0x4e3420, 9.75, 0.4, 7.0, scene); furn(scene, 9.55, 6.55, 9.93, 7.45);
+  box(0.35, 0.8, 0.9, 0x4e3420, 9.75, 0.4, 7.0, scene); furn(scene, 9.55, 6.55, 9.93, 7.45, 0.8);
   addProp(scene, 'box', 9.75, 0.8, 7.0);
   plant(scene, 5.4, 5.6);
   rug(scene, 8.9, 8.0, 1.2, 3.0, 0x5a3a3a);
@@ -639,13 +639,15 @@ function buildVan(scene) {
   add(1.0, 0.4, 0.05, 0x223344, -1.75, 1.7, -2.24); add(1.0, 0.4, 0.05, 0x223344, 1.75, 1.7, -2.24);
   // надпись на борту (полоса)
   add(0.02, 0.25, 3.0, 0x2a4a7a, -1.25, 1.5, 0); add(0.02, 0.25, 3.0, 0x2a4a7a, 1.25, 1.5, 0);
-  // стойка с оборудованием (левая стена)
-  const rack = add(0.4, 1.6, 2.2, 0x3a3a40, -0.95, 1.2, -0.2);
-  for (let i = 0; i < 3; i++) add(0.42, 0.04, 2.2, 0x55555a, -0.95, 0.65 + i * 0.5, -0.2);
-  const cols = [0xd04040, 0x40a0d0, 0xe0c040, 0x60c060, 0xa060d0, 0xd08040];
-  for (let i = 0; i < 12; i++) add(0.15, 0.15, 0.2, cols[i % 6], -0.85, 0.75 + Math.floor(i / 4) * 0.5, -1.0 + (i % 4) * 0.5);
-  rack.userData.kind = 'rack';
-  g.children.forEach(c => { if (c.position.x < -0.7 && c.position.x > -1.1 && c.position.y > 0.6) { c.userData.kind = 'rack'; interactables.push(c); } });
+  // стеллаж с оборудованием на левой стене: перфопанель и две полки
+  add(0.03, 1.55, 3.95, 0x2b313b, -1.145, 1.33, 0);
+  for (let i = 0; i < 40; i++) add(0.005, 0.02, 0.02, 0x14181e, -1.128, 0.7 + (i % 5) * 0.32, -1.85 + Math.floor(i / 5) * 0.53);
+  const rackSlots = [];
+  for (const [row, y] of [[0, 1.62], [1, 1.02]]) {
+    add(0.24, 0.03, 3.95, 0x5a5f68, -1.02, y - 0.015, 0);
+    add(0.02, 0.06, 3.95, 0x777c84, -0.9, y + 0.015, 0);
+    for (let i = 0; i < 8; i++) rackSlots.push({ x: 8.5 - 1.03, y, z: 17.2 - 1.7 + i * 0.486 });
+  }
   // стол с монитором и пультом
   add(0.6, 0.06, 2.2, 0x55555a, 0.88, 0.95, 0.3);
   // монитор камеры
@@ -674,9 +676,9 @@ function buildVan(scene) {
   addCollider(7.2, 7.4, 15.0, 19.4, 'van'); addCollider(9.6, 9.8, 15.0, 19.4, 'van');
   addCollider(7.2, 9.8, 19.3, 21.0, 'van');
   addCollider(5.9, 7.3, 14.9, 15.1, 'van'); addCollider(9.7, 11.1, 14.9, 15.1, 'van');
-  addCollider(7.4, 8.0, 16.0, 18.1, 'furn'); // стойка
-  addCollider(9.2, 9.6, 16.35, 18.6, 'furn'); // стол
-  Object.assign(van, { group: g, monitor, sanityBoard, sanityCanvas: sc, sanityTex: stex, x: 8.5, z: 17.2 });
+  addCollider(7.3, 7.62, 15.2, 19.2, 'furn', { top: 2 }); // стеллаж
+  addCollider(9.2, 9.6, 16.35, 18.6, 'furn', { top: 0.98 }); // стол
+  Object.assign(van, { group: g, rackSlots, monitor, sanityBoard, sanityCanvas: sc, sanityTex: stex, x: 8.5, z: 17.2 });
 }
 
 export function inVanArea(x, z) { return x > 7.3 && x < 9.7 && z > 15.0 && z < 19.4; }
@@ -722,6 +724,27 @@ export function collideCircle(x, z, r) {
     }
   }
   return { x, z };
+}
+
+// высота ближайшей поверхности под точкой (стол, кровать, полка...); 0 — пол.
+// y — текущая высота низа предмета: учитываются только поверхности не выше него
+export function surfaceAt(x, z, y = Infinity, r = 0) {
+  let h = 0;
+  for (const c of colliders) {
+    if (c.kind !== 'furn' || !c.top) continue;
+    if (!(x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r)) continue;
+    for (const lv of (c.levels || [c.top])) if (lv <= y + 0.06 && lv > h) h = lv;
+  }
+  return h;
+}
+// препятствие для летящего предмета на высоте y: стены, закрытые двери, мебель выше y (стеллажи открыты)
+export function solidAt(x, z, y, r = 0.05) {
+  for (const c of colliders) {
+    if (c.kind === 'door' && c.door.angle >= 0.35) continue;
+    if (c.kind === 'furn' && (c.levels || (c.top || 1) <= y)) continue;
+    if (x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r) return true;
+  }
+  return false;
 }
 
 export function pointBlocked(x, z, r = 0.05) {
@@ -827,15 +850,17 @@ export function updateProps(dt) {
     if (p.rest) continue;
     const m = p.mesh;
     p.vy -= 9.8 * dt;
+    const bottom = m.position.y - p.hy;
     let nx = m.position.x + p.vx * dt, nz = m.position.z + p.vz * dt, ny = m.position.y + p.vy * dt;
-    if (pointBlocked(nx, m.position.z, p.r) && colliders.some(c => c.kind === 'wall' && nx > c.x0 - p.r && nx < c.x1 + p.r && m.position.z > c.z0 - p.r && m.position.z < c.z1 + p.r)) { p.vx *= -0.4; nx = m.position.x; }
-    if (colliders.some(c => c.kind === 'wall' && m.position.x > c.x0 - p.r && m.position.x < c.x1 + p.r && nz > c.z0 - p.r && nz < c.z1 + p.r)) { p.vz *= -0.4; nz = m.position.z; }
-    if (ny < p.hy) {
-      ny = p.hy;
+    if (solidAt(nx, m.position.z, bottom, p.r * 0.6)) { p.vx *= -0.4; nx = m.position.x; }
+    if (solidAt(m.position.x, nz, bottom, p.r * 0.6)) { p.vz *= -0.4; nz = m.position.z; }
+    const floor = surfaceAt(nx, nz, bottom) + p.hy;
+    if (ny < floor) {
+      ny = floor;
       if (p.vy < -1 && G.onPropImpact) G.onPropImpact(p, -p.vy);
       if (Math.abs(p.vy) > 1.2) p.vy = -p.vy * 0.3; else p.vy = 0;
       p.vx *= 0.6; p.vz *= 0.6;
-      if (Math.abs(p.vx) + Math.abs(p.vz) < 0.1 && p.vy === 0) { p.rest = true; }
+      if (Math.abs(p.vx) + Math.abs(p.vz) < 0.1 && p.vy === 0) { p.rest = true; p.room = roomAt(nx, nz); }
     } else {
       m.rotation.x += p.vx * dt * 3; m.rotation.z += p.vz * dt * 3;
     }

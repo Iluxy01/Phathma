@@ -438,7 +438,7 @@ export class Ghost {
   }
 
   // ---------- явления ----------
-  startEvent() {
+  startEvent(mode = null, dur = null) {
     const p = G.player;
     if (segBlocked(this.x, this.z, p.x, p.z) || this.distTo(p.x, p.z) > 7) {
       // появиться рядом с игроком
@@ -452,8 +452,8 @@ export class Ghost {
       if (!found) return;
     }
     this.eventActive = true;
-    this.eventMode = this.m.water && Math.random() < 0.5 ? 'sing' : pick(['stand', 'walk', 'walk']);
-    this.eventUntil = G.t + rand(2.2, 4);
+    this.eventMode = mode || (this.m.water && Math.random() < 0.5 ? 'sing' : pick(['stand', 'walk', 'walk']));
+    this.eventUntil = G.t + (dur || rand(2.2, 4));
     this.eventSeen = false;
     this.mesh.visible = true;
     this.path = null;
@@ -510,10 +510,13 @@ export class Ghost {
     this.startHunt();
   }
 
-  startHunt() {
+  startHunt(cursed = false) {
+    if (this.hunting) { if (cursed) this.huntEnd += 15; return; }
+    if (this.eventActive) this.endEvent();
+    this.cursed = cursed;
     this.hunting = true;
     this.graceUntil = G.t + 3.5;
-    this.huntEnd = G.t + (this.m.shortHunt ? rand(18, 22) : rand(28, 40));
+    this.huntEnd = G.t + (this.m.shortHunt ? rand(18, 22) : rand(28, 40)) + (cursed ? 20 : 0);
     this.teleported = false; this.unseenT = 0;
     this.losTime = 0; this.lastKnown = null; this.path = null; this.blinkT = 0;
     if (frontDoor.angle > 0.1) sfx.door(frontDoor.cx, frontDoor.cz, true);

@@ -160,3 +160,18 @@ body:not(.land) #tab-ev { grid-template-columns: 1fr; }
 .invitem button { background: #3a2a2a; color: var(--text); border: 1px solid #5a3a3a; border-radius: 8px; padding: 6px 10px; }
 .result-ghost { font-size: 26px; font-weight: 800; color: var(--accent); }
 .bad-text { color: var(--warn); }
+
+/* ---------- проклятые предметы ---------- */
+#mirrorView { position: fixed; inset: 0; z-index: 4; pointer-events: none; display: none;
+  background: radial-gradient(circle at center, transparent 0 34vmin, rgba(160,140,90,0.9) 34.5vmin 37vmin, #050505 37.5vmin); }
+#mirrorView span { position: absolute; top: 10%; left: 50%; transform: translateX(-50%); color: #cbb87a; font: italic 15px serif; letter-spacing: 2px; }
+body.mirroring #mirrorView { display: block; }
+#tarotCard { position: fixed; z-index: 25; left: 50%; top: 45%; transform: translate(-50%, -50%); width: 200px; padding: 22px 16px; text-align: center; pointer-events: none;
+  background: linear-gradient(160deg, #3a1450, #1c0a28); border: 3px solid #d8b450; border-radius: 14px; box-shadow: 0 0 40px rgba(216,180,80,0.35); animation: cardIn .35s ease-out; }
+#tarotCard b { display: block; color: #f0d480; font: 700 20px serif; letter-spacing: 2px; margin-bottom: 10px; }
+#tarotCard p { margin: 0; color: #e8dcc8; font-size: 14px; line-height: 1.4; }
+@keyframes cardIn { from { transform: translate(-50%, -50%) rotateY(90deg); } to { transform: translate(-50%, -50%) rotateY(0); } }
+@media (prefers-reduced-motion: reduce) { #tarotCard { animation: none; } }
+.board-answer { font: 700 22px serif !important; color: #e8c890 !important; min-height: 1.6em; }
+#cursedBtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+#cursedBtns .btn { margin: 0; font-size: 14px; padding: 10px; }
