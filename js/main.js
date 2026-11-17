@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { G, rand, clamp, toast, pick } from './state.js';
 import * as W from './world.js';
-import { initAudio, sfx, setWindIndoor, suspendAudio, setStatic, setHuntAudio } from './audio.js';
+import { initAudio, sfx, setWindIndoor, suspendAudio, setStatic, setHuntAudio, updateAudio } from './audio.js';
 import * as I from './items.js';
 import { Ghost, GHOSTS } from './ghost.js';
 import * as UI from './ui.js';
@@ -216,8 +216,8 @@ function interact() {
   switch (t.kind) {
     case 'unhide':
       p.x = p.hidden.out.x; p.z = p.hidden.out.z;
+      sfx.wardrobe(p.hidden.x, p.hidden.z);
       p.hidden = null; document.body.classList.remove('hiding');
-      sfx.door(p.x, p.z);
       break;
     case 'door':
       if (t.door.locked) { toast('Дверь заперта!'); sfx.knock(t.door.cx, t.door.cz); return; }
@@ -239,7 +239,7 @@ function interact() {
       p.hidden = t.spot; p.x = t.spot.x; p.z = t.spot.z;
       p.yaw = t.spot.yaw; p.pitch = 0;
       document.body.classList.add('hiding');
-      sfx.door(p.x, p.z);
+      sfx.wardrobe(p.x, p.z);
       break;
     }
     case 'item': I.pickup(t.item); break;
@@ -255,7 +255,7 @@ function interact() {
 }
 
 // ---------- игрок ----------
-let stepAcc = 0;
+let stepAcc = 0, lastIndoor = null;
 function updatePlayer(dt) {
   const p = G.player;
   if (p.dead) return;
@@ -288,12 +288,17 @@ function updatePlayer(dt) {
     p.x = r.x; p.z = r.z;
     p.bob += moved * 5.5;
     stepAcc += moved;
-    if (stepAcc > (speed > 2 ? 0.75 : 0.6)) { stepAcc = 0; sfx.step(0.12, 0); }
+    if (stepAcc > (speed > 2 ? 0.75 : 0.6)) {
+      stepAcc = 0;
+      const r = W.roomAt(p.x, p.z);
+      sfx.step(W.inVanArea(p.x, p.z) ? 'metal' : r === '.' ? 'grass' : (r === 'K' || r === 'W') ? 'tile' : 'wood', speed > 2);
+    }
   }
   p.room = W.roomAt(p.x, p.z);
   p.inHouse = p.room !== '.';
   p.inVan = W.inVanArea(p.x, p.z);
-  setWindIndoor(p.inHouse || p.inVan);
+  const ind = p.inHouse || p.inVan;
+  if (ind !== lastIndoor) { lastIndoor = ind; setWindIndoor(ind); }
 }
 
 function updateCamera(dt) {
@@ -377,6 +382,7 @@ function takePhotoNow() {
 
 // ---------- смерть / конец ----------
 let deathT = -1;
+G.onPropImpact = (pr, speed) => sfx.impact(pr.mesh.position.x, pr.mesh.position.z, pr.snd, speed);
 G.onDeath = () => {
   deathT = 0;
   $('death').classList.add('on');
@@ -452,6 +458,8 @@ function frame(now) {
       const d = gh.distTo(G.player.x, G.player.z);
       heartT -= dt;
       if (d < 10 && heartT <= 0) { sfx.heartbeat(0.3 * (1 - d / 10) + 0.05); heartT = 0.4 + d * 0.06; }
+      if (d < 9 && Math.random() < dt * 0.25) sfx.growl(gh.x, gh.z);
+      if (d < 8 && Math.random() < dt * 1.2) sfx.lightBuzz(gh.x, gh.z);
     }
     hudT -= dt;
     if (hudT <= 0) { hudT = 0.1; target = findTarget(); UI.updateHUD(target); }
@@ -461,6 +469,7 @@ function frame(now) {
     G.emfSources = G.emfSources.filter(s => s.until > G.t);
   }
   updateCamera(dt);
+  updateAudio(dt);
   renderMonitor();
   if (G.pendingPhoto) { G.pendingPhoto = false; takePhotoNow(); }
   renderer.render(scene, camera);

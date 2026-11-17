@@ -210,7 +210,11 @@ function buildWalls(scene) {
     flush();
   }
   // плинтус снаружи
-  box(MW + 0.3, 0.3, MH + 0.3, EXT2, MW / 2, 0.15, MH / 2, scene).scale.set(1, 1, 1);
+  // цоколь — только полоса снаружи стен
+  box(MW + 0.36, 0.3, 0.12, EXT2, MW / 2, 0.15, -0.12, scene);
+  box(MW + 0.36, 0.3, 0.12, EXT2, MW / 2, 0.15, MH + 0.12, scene);
+  box(0.12, 0.3, MH + 0.36, EXT2, -0.12, 0.15, MH / 2, scene);
+  box(0.12, 0.3, MH + 0.36, EXT2, MW + 0.12, 0.15, MH / 2, scene);
 }
 
 function edgeKey(d) {
@@ -447,13 +451,13 @@ function rug(scene, cx, cz, w, d, color) {
 }
 
 function addProp(scene, kind, x, y, z) {
-  let geo, color, r = 0.08;
+  let geo, color, r = 0.08, snd = 'wood';
   switch (kind) {
-    case 'cup': geo = new THREE.CylinderGeometry(0.045, 0.035, 0.1, 6); color = pick([0xd0d0d0, 0xc04040, 0x4060a0]); r = 0.05; break;
+    case 'cup': snd = 'ceramic'; geo = new THREE.CylinderGeometry(0.045, 0.035, 0.1, 6); color = pick([0xd0d0d0, 0xc04040, 0x4060a0]); r = 0.05; break;
     case 'book': geo = new THREE.BoxGeometry(0.16, 0.04, 0.22); color = pick([0x803030, 0x305080, 0x406030, 0x705020]); r = 0.1; break;
-    case 'bottle': geo = new THREE.CylinderGeometry(0.035, 0.045, 0.25, 6); color = 0x3a7040; r = 0.05; break;
-    case 'plate': geo = new THREE.CylinderGeometry(0.11, 0.09, 0.025, 8); color = 0xe8e8e0; r = 0.11; break;
-    case 'toy': geo = new THREE.IcosahedronGeometry(0.09, 0); color = pick([0xe0c030, 0xe05050, 0x50a0e0]); r = 0.09; break;
+    case 'bottle': snd = 'glass'; geo = new THREE.CylinderGeometry(0.035, 0.045, 0.25, 6); color = 0x3a7040; r = 0.05; break;
+    case 'plate': snd = 'ceramic'; geo = new THREE.CylinderGeometry(0.11, 0.09, 0.025, 8); color = 0xe8e8e0; r = 0.11; break;
+    case 'toy': snd = 'plastic'; geo = new THREE.IcosahedronGeometry(0.09, 0); color = pick([0xe0c030, 0xe05050, 0x50a0e0]); r = 0.09; break;
     case 'box': geo = new THREE.BoxGeometry(0.2, 0.15, 0.2); color = 0x9a7a50; r = 0.12; break;
     default: geo = new THREE.BoxGeometry(0.1, 0.1, 0.1); color = 0x888888;
   }
@@ -463,7 +467,7 @@ function addProp(scene, kind, x, y, z) {
   m.position.set(x, y + hy, z);
   m.rotation.y = rand(0, Math.PI * 2);
   scene.add(m);
-  props.push({ mesh: m, vx: 0, vy: 0, vz: 0, r, hy, rest: true, room: roomAt(x, z) });
+  props.push({ mesh: m, vx: 0, vy: 0, vz: 0, r, hy, snd, rest: true, room: roomAt(x, z) });
 }
 
 function buildFurniture(scene) {
@@ -537,7 +541,7 @@ function buildOutside(scene) {
   const ground = new THREE.Mesh(jitter(new THREE.PlaneGeometry(80, 80, 24, 24), 0.0), new THREE.MeshLambertMaterial({ color: 0x1e3020, emissive: 0x08120a, flatShading: true }));
   ground.rotation.x = -Math.PI / 2;
   const p = ground.geometry.attributes.position;
-  for (let i = 0; i < p.count; i++) p.setZ(i, rand(-0.15, 0.05));
+  for (let i = 0; i < p.count; i++) p.setZ(i, rand(-0.15, -0.03));
   ground.geometry.computeVertexNormals();
   ground.position.set(8, -0.02, 10);
   scene.add(ground);
@@ -828,6 +832,7 @@ export function updateProps(dt) {
     if (colliders.some(c => c.kind === 'wall' && m.position.x > c.x0 - p.r && m.position.x < c.x1 + p.r && nz > c.z0 - p.r && nz < c.z1 + p.r)) { p.vz *= -0.4; nz = m.position.z; }
     if (ny < p.hy) {
       ny = p.hy;
+      if (p.vy < -1 && G.onPropImpact) G.onPropImpact(p, -p.vy);
       if (Math.abs(p.vy) > 1.2) p.vy = -p.vy * 0.3; else p.vy = 0;
       p.vx *= 0.6; p.vz *= 0.6;
       if (Math.abs(p.vx) + Math.abs(p.vz) < 0.1 && p.vy === 0) { p.rest = true; }

@@ -306,7 +306,6 @@ export class Ghost {
           const sp = rand(2.5, 5);
           pr.vx = Math.sin(ang) * sp; pr.vz = Math.cos(ang) * sp; pr.vy = rand(1, 2.5); pr.rest = false;
           const px = pr.mesh.position.x, pz = pr.mesh.position.z;
-          setTimeout(() => sfx.thud(pr.mesh.position.x, pr.mesh.position.z), 450);
           this.emf(px, pz, 3);
           this.sound(px, pz, 0.9);
           if (this.m.multiThrow && pd < 5) G.sanity = Math.max(0, G.sanity - 2);

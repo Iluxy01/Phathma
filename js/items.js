@@ -1,7 +1,7 @@
 // Снаряжение: модели, использование, установка, показания
 import * as THREE from 'three';
 import { G, rand, pick, toast, completeObjective, clamp } from './state.js';
-import { roomAt, roomLit, pointBlocked, segBlocked, mat, box, interactables } from './world.js';
+import { roomAt, roomLit, pointBlocked, segBlocked, collideCircle, colliders, mat, box, interactables } from './world.js';
 import { sfx, setStatic, speak } from './audio.js';
 
 export const ITEM_DEFS = {
@@ -257,33 +257,104 @@ function placePos(dist = 0.65) {
   const p = G.player;
   const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
   let x = p.x + fx * dist, z = p.z + fz * dist;
-  if (pointBlocked(x, z, 0.08) || segBlocked(p.x, p.z, x, z)) { x = p.x + fx * 0.15; z = p.z + fz * 0.15; }
-  return { x, z };
+  if (segBlocked(p.x, p.z, x, z)) { x = p.x + fx * 0.3; z = p.z + fz * 0.3; }
+  return collideCircle(x, z, 0.15);
 }
 
+// звук удара предмета о пол
+const IMPACT = { book: 'soft', smudge: 'soft', crucifix: 'metal' };
+// цилиндрические предметы при падении ложатся на бок
+const ROLLS = new Set(['salt', 'pills', 'smudge', 'uv']);
+
+// бросок: предмет вылетает из руки и падает на пол по дуге
+const flying = [];
+const tmpW = new THREE.Vector3();
 export function dropSelected() {
   const it = selected();
   if (!it) return;
-  if (G.player.hidden) { toast('Нельзя положить в шкафу'); return; }
-  const { x, z } = placePos();
-  removeFromInv(it);
-  placeItem(it, x, z, G.player.yaw);
+  const p = G.player;
+  if (p.hidden) { toast('Нельзя положить в шкафу'); return; }
   if (it.type === 'box') setStatic(false);
+  if (it.type === 'video') {
+    // камеру ставим аккуратно на штатив
+    const { x, z } = placePos();
+    removeFromInv(it);
+    placeItem(it, x, z, p.yaw);
+    return;
+  }
+  if (it.mesh.parent === camera) it.mesh.getWorldPosition(tmpW);
+  else tmpW.set(p.x, 1.4, p.z);
+  removeFromInv(it);
+  const fx = -Math.sin(p.yaw) * Math.cos(p.pitch), fy = Math.sin(p.pitch), fz = -Math.cos(p.yaw) * Math.cos(p.pitch);
+  const sp = 2.2;
+  it.mesh.scale.setScalar(1.4);
+  it.mesh.rotation.set(0, p.yaw, 0, 'YXZ');
+  it.mesh.position.copy(tmpW);
+  scene.add(it.mesh);
+  flying.push({
+    it, x: tmpW.x, y: tmpW.y, z: tmpW.z,
+    vx: fx * sp, vy: fy * sp + 1.2, vz: fz * sp,
+    sx: rand(-6, 6), sy: rand(-4, 4), sz: rand(-6, 6), bounces: 0,
+  });
 }
 
-export function placeItem(it, x, z, yaw) {
+function wallHit(x, z, r) {
+  for (const c of colliders) {
+    if (c.kind === 'furn') continue;
+    if (c.kind === 'door' && c.door.angle >= 0.35) continue;
+    if (x > c.x0 - r && x < c.x1 + r && z > c.z0 - r && z < c.z1 + r) return true;
+  }
+  return false;
+}
+
+function updateFlying(dt) {
+  for (let i = flying.length - 1; i >= 0; i--) {
+    const f = flying[i], m = f.it.mesh;
+    f.vy -= 9.8 * dt;
+    let nx = f.x + f.vx * dt, nz = f.z + f.vz * dt;
+    if (wallHit(nx, f.z, 0.06)) { f.vx *= -0.35; nx = f.x; }
+    if (wallHit(f.x, nz, 0.06)) { f.vz *= -0.35; nz = f.z; }
+    f.x = nx; f.z = nz; f.y += f.vy * dt;
+    m.rotation.x += f.sx * dt; m.rotation.y += f.sy * dt; m.rotation.z += f.sz * dt;
+    if (f.y <= 0.06 && f.vy < 0) {
+      const speed = Math.hypot(f.vx, f.vy, f.vz);
+      sfx.impact(f.x, f.z, IMPACT[f.it.type] || 'plastic', speed);
+      if (Math.abs(f.vy) > 1.5 && f.bounces < 2) {
+        f.bounces++; f.y = 0.06; f.vy = -f.vy * 0.3; f.vx *= 0.5; f.vz *= 0.5;
+        f.sx *= 0.5; f.sz *= 0.5;
+      } else {
+        flying.splice(i, 1);
+        scene.remove(m);
+        const r = collideCircle(f.x, f.z, 0.15);
+        placeItem(f.it, r.x, r.z, m.rotation.y, true);
+        continue;
+      }
+    }
+    m.position.set(f.x, f.y, f.z);
+  }
+}
+
+const box3 = new THREE.Box3();
+export function placeItem(it, x, z, yaw, lying = false) {
   it.placed = true;
   it.x = x; it.z = z;
   it.room = roomAt(x, z);
-  it.mesh.position.set(x, 0.01, z);
-  it.mesh.rotation.set(0, yaw, 0);
   if (it.type === 'motion' || it.type === 'video') { it.on = true; }
-  scene.add(it.mesh);
+  const m = it.mesh;
+  m.scale.setScalar(it.type === 'video' ? 1 : 1.4);
+  m.rotation.set(0, yaw, 0, 'YXZ');
+  if (lying && ROLLS.has(it.type)) m.rotation.z = Math.PI / 2;
+  else if (lying) { m.rotation.x = rand(-0.05, 0.05); m.rotation.z = rand(-0.05, 0.05); }
+  m.position.set(x, 0, z);
+  scene.add(m);
+  m.updateMatrixWorld(true);
+  box3.setFromObject(m);
+  m.position.y = 0.022 - box3.min.y; // поверх ковров
   if (it.type === 'video') {
     it.cam = new THREE.PerspectiveCamera(70, 1.6, 0.05, 30);
     it.cam.position.set(x, 0.6, z); it.cam.rotation.set(0, yaw, 0, 'YXZ');
     it.cam.layers.enable(2);
-    it.mesh.position.y = 0.5; // как будто на штативе
+    m.position.y = 0.5; // на штативе
     if (!it.data.tripod) {
       it.data.tripod = new THREE.Group();
       for (let i = 0; i < 3; i++) {
@@ -299,7 +370,7 @@ export function placeItem(it, x, z, yaw) {
     it.data.tripod.traverse(o => { o.userData.kind = 'item'; o.userData.item = it; });
   }
   G.placed.push(it);
-  interactables.push(it.mesh);
+  interactables.push(m);
   if (G.ghost) G.ghost.onItemPlaced(it);
 }
 
@@ -311,7 +382,9 @@ export function pickup(it) {
   scene.remove(it.mesh);
   if (it.data.tripod) scene.remove(it.data.tripod);
   it.placed = false;
+  it.mesh.scale.setScalar(1);
   if (it.type === 'motion') it.on = false;
+  sfx.click();
   G.inv[slot] = it; G.sel = slot;
   attachHeld();
 }
@@ -336,6 +409,7 @@ export function useSelected() {
       if (it.data.used) { toast('Благовония уже сгорели'); return; }
       it.data.used = true; it.data.burnUntil = G.t + 6;
       it.data.tip.material.color.setHex(0xff7020);
+      sfx.lighter();
       if (G.ghost) G.ghost.onSmudge(p.x, p.z);
       toast('Благовония зажжены');
       break;
@@ -421,7 +495,7 @@ export function askSpiritBox() {
     if (ans) {
       const word = pick(q.a);
       G.boxText = '📻 ' + word.toUpperCase();
-      sfx.ghostVoice(gh.x, gh.z);
+      sfx.ghostVoice();
       speak(word);
     } else {
       G.boxText = '…ш-ш-ш…';
@@ -554,9 +628,11 @@ export function updateItems(dt) {
       const burning = G.t < s.data.burnUntil;
       s.data.tip.material.color.setHex(burning ? (Math.random() < 0.5 ? 0xff7020 : 0xffa040) : 0x1a1a1a);
       if (burning && Math.random() < 0.5) spawnSmoke(s);
+      if (burning && Math.random() < 0.06) { s.data.tip.getWorldPosition(tmpW); sfx.crackle(tmpW.x, tmpW.z); }
     }
   }
   updateSmoke(dt);
+  updateFlying(dt);
 
   // УФ-отпечатки
   const uv = uvHeldOn();
