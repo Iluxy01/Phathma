@@ -2,10 +2,11 @@
 import * as THREE from 'three';
 import { G, rand, randi, pick, clamp, completeObjective } from './state.js';
 import {
-  HOUSE_ROOMS, ROOMS, roomAt, findPath, randomCellIn, doors, switches, props,
+  hideSpots, HOUSE_ROOMS, ROOMS, roomAt, findPath, randomCellIn, doors, switches, props,
   setLight, roomLit, segBlocked, frontDoor, fuseBox, mat,
 } from './world.js';
 import { sfx, setHuntAudio, setHuntIntensity } from './audio.js';
+import { nearAppliances, toggleAppliance } from './appliances.js';
 import { addPrint, tryCrucifix, saltPiles, stepSalt, drawBook, heldElectronicOn } from './items.js';
 
 export const GHOSTS = [
@@ -93,6 +94,34 @@ export const GHOSTS = [
     weakness: 'Во время охоты двигается медленнее остальных.',
     mods: { teleport: true, slow: true, activity: 1.2 },
   },
+  {
+    id: 'viy', name: 'Вий', ev: ['emf', 'uv', 'evp'], hunt: 50,
+    desc: 'Древний дух с тяжёлыми веками.',
+    strength: 'Во время охоты чувствует жертву сквозь стены в радиусе 4,5 м — прятаться рядом с ним бесполезно.',
+    weakness: 'Пока не увидит вас, бредёт очень медленно.',
+    mods: { seeThrough: true, blindSlow: true },
+  },
+  {
+    id: 'bannik', name: 'Банник', ev: ['temp', 'orbs', 'book'], hunt: 50,
+    desc: 'Злой дух бани, любящий воду и жар.',
+    strength: 'Швыряет предметы прямо в вас — каждый удар отнимает рассудок. Часто открывает краны.',
+    weakness: 'Наступив на соль, теряет силы и минуту не может начать охоту.',
+    mods: { throwAt: true, tapMul: 4, saltStun: true },
+  },
+  {
+    id: 'koshey', name: 'Кощей', ev: ['box', 'dots', 'temp'], hunt: 50,
+    desc: 'Бессмертный, чья смерть спрятана далеко.',
+    strength: 'Распятие на него не действует.',
+    weakness: 'Благовония отпугивают его на 3 минуты, а не на полторы.',
+    mods: { noCrucifix: true, smudge: 180 },
+  },
+  {
+    id: 'liho', name: 'Лихо', ev: ['emf', 'box', 'flame'], hunt: 55,
+    desc: 'Одноглазое Лихо, которое лучше не будить.',
+    strength: 'Явления Лиха отнимают вдвое больше рассудка. На охоте ускоряется, пока вы на него смотрите.',
+    weakness: 'Перед каждой охотой тяжело дышит рядом с вами — у вас есть несколько секунд, чтобы спрятаться.',
+    mods: { warnBreath: true, gazeSpeed: true, eventDrain: 2 },
+  },
 ];
 
 const FIRST_M = ['Пётр', 'Иван', 'Григорий', 'Семён', 'Николай', 'Фёдор', 'Михаил', 'Алексей'];
@@ -141,6 +170,14 @@ export class Ghost {
     this.fullName = pick(this.female ? FIRST_F : FIRST_M) + ' ' + pick(LAST) + (this.female ? 'а' : '');
     this.age = randi(9, 88);
     this.mesh = buildGhostMesh(this.female, rand(0.92, 1.05));
+    // у каждого призрака свой оттенок одежды
+    this.mesh.userData.mats[0].color.setHex(pick([0x2c3036, 0x3a2c2c, 0x2c3a30, 0x30303e, 0x3a3428, 0x26262a]));
+    this.hidden = [];
+    // туманный шар для явлений
+    this.mist = new THREE.Mesh(new THREE.IcosahedronGeometry(0.22, 1),
+      new THREE.MeshBasicMaterial({ color: 0xc8d4e0, transparent: true, opacity: 0.35, depthWrite: false, fog: false }));
+    this.mist.visible = false;
+    scene.add(this.mist);
     this.mesh.visible = false;
     scene.add(this.mesh);
     this.path = null; this.pauseUntil = 0; this.yaw = 0;
@@ -184,7 +221,26 @@ export class Ghost {
     for (const r of HOUSE_ROOMS) this.baseTemps[r] = r === this.home ? 0 : G.temps[r];
   }
 
-  has(ev) { return this.def.ev.includes(ev); }
+  has(ev) { return this.def.ev.includes(ev) && !this.hidden.includes(ev); }
+
+  // применяется в начале расследования
+  applyDifficulty(diff) {
+    const ev = [...this.def.ev].sort(() => Math.random() - 0.5);
+    this.hidden = ev.slice(0, 3 - diff.evidence);
+    if (this.hidden.includes('orbs')) { for (const o of this.orbs) this.scene.remove(o); this.orbs = []; }
+    if (this.hidden.includes('dots') && this.dots) { this.scene.remove(this.dots); this.dots = null; }
+    this.tHuntCheck = G.t + diff.setup;
+    this.cooldownUntil = G.t + diff.setup;
+    this.roomChanged = !diff.roomChange;
+  }
+
+  changeRoom() {
+    const old = this.home;
+    this.home = pick(HOUSE_ROOMS.filter(r => r !== 'H' && r !== old));
+    this.baseTemps[old] = this.baseTemps[this.home] ?? 15;
+    for (const o of this.orbs) { const [x, z] = randomCellIn(this.home); o.userData.bx = x; o.userData.bz = z; }
+    this.roomChanged = true;
+  }
   distTo(x, z) { return Math.hypot(this.x - x, this.z - z); }
 
   huntThreshold() {
@@ -211,6 +267,13 @@ export class Ghost {
       o.position.set(u.bx + Math.sin(t * 0.3 + u.ph) * 0.8, u.by + Math.sin(t * 0.7 + u.ph) * 0.3, u.bz + Math.cos(t * 0.25 + u.ph) * 0.8);
     }
     this.updateDots(dt);
+    this.updateMist(dt);
+    if (this.huntPending && t > this.huntPending) {
+      this.huntPending = 0;
+      if (!this.hunting && G.player.inHouse && !G.player.dead) this.startHunt();
+    }
+    if (!this.roomChanged && G.sanity < 50 && Math.random() < dt * 0.004) this.changeRoom();
+    if (G.t > (this.actT || 0)) { this.actT = G.t + 5; G.activity.push(G.actNow); G.actNow = 0; if (G.activity.length > 36) G.activity.shift(); }
     if (this.hunting) { this.updateHunt(dt); return; }
     if (this.eventActive) { this.updateEvent(dt); return; }
     // блуждание
@@ -308,6 +371,7 @@ export class Ghost {
     for (const p of saltPiles) {
       if (!p.stepped && Math.hypot(p.x - this.x, p.z - this.z) < 0.4) {
         stepSalt(p); this.footprints = 4; completeObjective('salt');
+        if (this.m.saltStun) this.smudgeUntil = Math.max(this.smudgeUntil, G.t + 60);
         this.sound(p.x, p.z, 0.5);
       }
     }
@@ -339,6 +403,9 @@ export class Ghost {
     if (candles.length) opts.push(['candle', 1.5]);
     const books = this.has('book') ? G.placed.filter(it => it.type === 'book' && !it.data.written && this.distTo(it.x, it.z) < 3.5) : [];
     if (books.length) opts.push(['book', 6]);
+    const apps = nearAppliances(this.x, this.z, 3.5);
+    if (apps.length) opts.push(['appliance', apps.some(a => a.kind === 'tap') ? (this.m.tapMul || 1) : 1]);
+    G.actNow += 1;
     let tot = opts.reduce((a, o) => a + o[1], 0), r = Math.random() * tot, act = opts[0][0];
     for (const o of opts) { r -= o[1]; if (r <= 0) { act = o[0]; break; } }
 
@@ -369,7 +436,8 @@ export class Ghost {
         for (let i = 0; i < Math.min(n, nearProps.length); i++) {
           const pr = nearProps[i];
           let ang = rand(0, Math.PI * 2);
-          if (Math.random() < 0.4) ang = Math.atan2(p.x - pr.mesh.position.x, p.z - pr.mesh.position.z);
+          if (Math.random() < (this.m.throwAt ? 0.9 : 0.4)) ang = Math.atan2(p.x - pr.mesh.position.x, p.z - pr.mesh.position.z);
+          if (this.m.throwAt && pd < 4) G.sanity = Math.max(0, G.sanity - 3);
           const sp = rand(2.5, 5);
           pr.vx = Math.sin(ang) * sp; pr.vz = Math.cos(ang) * sp; pr.vy = rand(1, 2.5); pr.rest = false;
           const px = pr.mesh.position.x, pz = pr.mesh.position.z;
@@ -401,6 +469,13 @@ export class Ghost {
         const cx = c.placed ? c.x : p.x, cz = c.placed ? c.z : p.z;
         sfx.puff(cx, cz);
         this.emf(cx, cz, 2);
+        break;
+      }
+      case 'appliance': {
+        const a = pick(apps);
+        toggleAppliance(a, 'ghost');
+        this.emf(a.x, a.z, 2);
+        this.sound(a.x, a.z, 0.8);
         break;
       }
       case 'book': {
@@ -452,10 +527,13 @@ export class Ghost {
       if (!found) return;
     }
     this.eventActive = true;
-    this.eventMode = mode || (this.m.water && Math.random() < 0.5 ? 'sing' : pick(['stand', 'walk', 'walk']));
+    this.eventMode = mode || (this.m.water && Math.random() < 0.5 ? 'sing' : pick(['stand', 'walk', 'walk', 'mist', 'shadow']));
+    G.actNow += 3;
     this.eventUntil = G.t + (dur || rand(2.2, 4));
     this.eventSeen = false;
-    this.mesh.visible = true;
+    this.mesh.visible = this.eventMode !== 'mist';
+    if (this.eventMode === 'mist') { this.mist.visible = true; this.mist.position.set(this.x, 1.3, this.z); }
+    if (this.eventMode === 'shadow') { this.eventUntil = G.t + rand(0.7, 1.2); this.mesh.userData.mats.forEach(m => { m.opacity = 0.97; m.emissive.setHex(0x000000); }); }
     this.path = null;
     this.yaw = Math.atan2(p.x - this.x, p.z - this.z);
     this.emf(this.x, this.z, 4);
@@ -467,17 +545,23 @@ export class Ghost {
   updateEvent(dt) {
     const p = G.player;
     this.yaw = Math.atan2(p.x - this.x, p.z - this.z);
+    if (this.eventMode === 'mist') {
+      const m = this.mist.position, d = Math.hypot(p.x - m.x, p.z - m.z);
+      if (d > 0.5) { m.x += (p.x - m.x) / d * dt * 1.0; m.z += (p.z - m.z) / d * dt * 1.0; m.y = 1.3 + Math.sin(G.t * 3) * 0.1; }
+      else { sfx.whisper(p.x, p.z); G.sanity = Math.max(0, G.sanity - 8); this.endEvent(); return; }
+      this.x = m.x; this.z = m.z;
+    }
     if (this.eventMode === 'walk') {
       const d = this.distTo(p.x, p.z);
       if (d > 0.8) { this.x += (p.x - this.x) / d * dt * 1.1; this.z += (p.z - this.z) / d * dt * 1.1; }
       else { sfx.scream(); G.sanity = Math.max(0, G.sanity - 5); this.endEvent(); return; }
     }
     const left = this.eventUntil - G.t;
-    this.mesh.visible = left > 0.8 || Math.random() < 0.5;
+    if (this.eventMode !== 'mist') this.mesh.visible = left > 0.8 || Math.random() < 0.5;
     G.flicker = this.distTo(p.x, p.z) < 8 ? 0.6 : 0;
     if (!this.eventSeen && this.playerLooksAtMe()) {
       this.eventSeen = true;
-      G.sanity = Math.max(0, G.sanity - 10);
+      G.sanity = Math.max(0, G.sanity - 10 * (this.m.eventDrain || 1));
       completeObjective('event');
     }
     if (left <= 0) this.endEvent();
@@ -486,8 +570,15 @@ export class Ghost {
   endEvent() {
     this.eventActive = false;
     this.mesh.visible = false;
+    this.mist.visible = false;
+    this.mesh.userData.mats[0].opacity = 0.88; this.mesh.userData.mats[1].opacity = 0.9;
+    this.mesh.userData.mats[0].emissive.setHex(0x0c0f13); this.mesh.userData.mats[1].emissive.setHex(0x1a1d22);
     G.flicker = 0;
     this.tEvent = G.t + rand(35, 75) / (this.m.eventMul || 1);
+  }
+
+  updateMist(dt) {
+    if (this.mist.visible) { this.mist.rotation.y += dt; this.mist.material.opacity = 0.25 + Math.random() * 0.15; }
   }
 
   playerLooksAtMe() {
@@ -506,7 +597,16 @@ export class Ghost {
     if (G.sanity > th) return;
     const chance = 0.2 + (th - G.sanity) / 100;
     if (Math.random() > chance) return;
-    if (tryCrucifix(this.x, this.z, this.m.crucifix || 3)) { this.cooldownUntil = G.t + 20; return; }
+    if (this.huntPending) return;
+    if (!this.m.noCrucifix && tryCrucifix(this.x, this.z, this.m.crucifix || 3)) { this.cooldownUntil = G.t + 20; return; }
+    if (this.m.warnBreath) {
+      // Лихо предупреждает тяжёлым дыханием рядом с жертвой
+      const p = G.player;
+      sfx.breath(p.x + rand(-1.5, 1.5), p.z + rand(-1.5, 1.5));
+      setTimeout(() => sfx.breath(p.x, p.z), 1800);
+      this.huntPending = G.t + 4.5;
+      return;
+    }
     this.startHunt();
   }
 
@@ -515,8 +615,10 @@ export class Ghost {
     if (this.eventActive) this.endEvent();
     this.cursed = cursed;
     this.hunting = true;
-    this.graceUntil = G.t + 3.5;
-    this.huntEnd = G.t + (this.m.shortHunt ? rand(18, 22) : rand(28, 40)) + (cursed ? 20 : 0);
+    const D = G.diff;
+    this.graceUntil = G.t + D.grace;
+    this.huntEnd = G.t + ((this.m.shortHunt ? rand(18, 22) : rand(28, 40)) * D.huntMul) + (cursed ? 20 : 0);
+    this.searchSpot = null; this.searchPause = 0;
     this.teleported = false; this.unseenT = 0;
     this.losTime = 0; this.lastKnown = null; this.path = null; this.blinkT = 0;
     if (frontDoor.angle > 0.1) sfx.door(frontDoor.cx, frontDoor.cz, true);
@@ -544,13 +646,14 @@ export class Ghost {
     let sees = false, detect = false, elec = false;
     if (!blind && p.inHouse && !p.dead) {
       sees = !p.hidden && d < 20 && !segBlocked(this.x, this.z, p.x, p.z);
+      if (this.m.seeThrough && d < 4.5) { detect = true; this.lastKnown = { x: p.x, z: p.z }; }
       elec = heldElectronicOn() && d < (this.m.elecRange || 7.5);
-      detect = sees || elec;
+      detect = detect || sees || elec;
     }
     this.losTime = sees ? this.losTime + dt : Math.max(0, this.losTime - dt * 2);
     if (detect) {
       this.lastKnown = { x: p.x, z: p.z };
-      this.knowsHidden = !!p.hidden && (p.seenHiding || elec);
+      this.knowsHidden = !!p.hidden && (p.seenHiding || elec || (this.m.seeThrough && d < 4.5));
     }
     // Анчутка: прыжок ближе к жертве
     this.unseenT = sees ? 0 : (this.unseenT || 0) + dt;
@@ -574,8 +677,15 @@ export class Ghost {
         else this.path = findPath(this.x, this.z, this.lastKnown.x, this.lastKnown.z);
       }
       if (!this.lastKnown && (!this.path || !this.path.length)) {
-        const [tx, tz] = randomCellIn(null);
-        this.path = findPath(this.x, this.z, tx, tz);
+        // призрак обыскивает шкафы поблизости
+        const spots = hideSpots.filter(h => this.distTo(h.out.x, h.out.z) < 9);
+        if (spots.length && Math.random() < 0.4) {
+          this.searchSpot = pick(spots);
+          this.path = findPath(this.x, this.z, this.searchSpot.out.x, this.searchSpot.out.z);
+        } else {
+          const [tx, tz] = randomCellIn(null);
+          this.path = findPath(this.x, this.z, tx, tz);
+        }
       }
     }
     // скорость
@@ -584,8 +694,16 @@ export class Ghost {
     if (this.m.slow) speed *= 0.82;
     if (this.m.losSpeed) speed = sees ? 1.4 + Math.min(this.losTime / 3, 1) * 1.6 : 1.0;
     if (this.m.darkSpeed) speed *= roomLit(roomAt(this.x, this.z)) ? 0.8 : 1.15;
+    if (this.m.blindSlow && !sees) speed = 1.15;
+    if (this.m.gazeSpeed && this.mesh.visible && this.playerLooksAtMe()) speed *= 1.25;
     if (blind) speed = 1.0;
-    this.moveAlong(dt, speed, 1.0);
+    speed *= G.diff.speedMul;
+    if (this.searchSpot && this.distTo(this.searchSpot.out.x, this.searchSpot.out.z) < 0.5 && !sees) {
+      // дёргает дверцы шкафа
+      sfx.rattle(this.searchSpot.x, this.searchSpot.z);
+      this.searchPause = t + 1.6; this.searchSpot = null; this.path = null;
+    }
+    if (t > this.searchPause) this.moveAlong(dt, speed, 1.0);
 
     // поимка
     if (t > this.graceUntil && d < 0.75 && p.inHouse && !p.dead) {

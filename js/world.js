@@ -125,6 +125,7 @@ export function buildWorld(scene) {
   buildFurniture(scene);
   buildVan(scene);
   buildRoof(scene);
+  buildDecor(scene);
 }
 
 function buildFloors(scene) {
@@ -686,16 +687,109 @@ export function inVanArea(x, z) { return x > 7.3 && x < 9.7 && z > 15.0 && z < 1
 export function drawSanityBoard() {
   const c = van.sanityCanvas, ctx = c.getContext('2d');
   ctx.fillStyle = '#0a1a10'; ctx.fillRect(0, 0, 256, 128);
-  ctx.fillStyle = '#7f7'; ctx.font = 'bold 22px monospace';
-  ctx.fillText('РАССУДОК', 16, 32);
-  ctx.font = 'bold 48px monospace';
+  ctx.fillStyle = '#7f7'; ctx.font = 'bold 13px monospace';
+  ctx.fillText('РАССУДОК', 10, 20);
+  ctx.fillText('АКТИВНОСТЬ', 126, 20);
   const s = Math.round(G.sanity);
-  ctx.fillStyle = s > 50 ? '#7f7' : s > 25 ? '#fd5' : '#f55';
-  ctx.fillText(s + '%', 16, 92);
-  ctx.fillStyle = '#244'; ctx.fillRect(140, 30, 100, 70);
-  ctx.fillStyle = s > 50 ? '#3c3' : s > 25 ? '#cb3' : '#c33';
-  ctx.fillRect(140, 30 + 70 * (1 - s / 100), 100, 70 * s / 100);
+  const shown = G.diff.sanityBoard;
+  ctx.font = 'bold 34px monospace';
+  ctx.fillStyle = !shown ? '#7a7' : s > 50 ? '#7f7' : s > 25 ? '#fd5' : '#f55';
+  ctx.fillText(shown ? s + '%' : '??', 10, 64);
+  ctx.fillStyle = '#0d2016'; ctx.fillRect(10, 80, 100, 34);
+  if (shown) { ctx.fillStyle = s > 50 ? '#3c3' : s > 25 ? '#cb3' : '#c33'; ctx.fillRect(10, 80, s, 34); }
+  // график активности призрака за последние 3 минуты
+  ctx.strokeStyle = '#244'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) { ctx.beginPath(); ctx.moveTo(126, 30 + i * 21); ctx.lineTo(248, 30 + i * 21); ctx.stroke(); }
+  const a = G.activity, n = 36, w = 122 / n;
+  ctx.strokeStyle = '#6f6'; ctx.lineWidth = 2; ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const v = a[a.length - n + i] ?? 0;
+    const x = 126 + i * w, y = 114 - Math.min(v, 6) / 6 * 84;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
   van.sanityTex.needsUpdate = true;
+}
+
+// ---------- декор: окна и картины ----------
+function windowAt(scene, cx, cz, alongX, inward) {
+  // alongX: окно тянется вдоль X (стена z = const); inward: +1/-1 — сторона комнаты
+  const glassM = new THREE.MeshBasicMaterial({ color: 0x18284a });
+  for (const side of [inward, -inward]) {
+    const off = side * 0.068;
+    const g = new THREE.Group();
+    g.position.set(alongX ? cx : cx + off, 1.55, alongX ? cz + off : cz);
+    g.rotation.y = alongX ? (side > 0 ? 0 : Math.PI) : (side > 0 ? Math.PI / 2 : -Math.PI / 2);
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), glassM);
+    g.add(glass);
+    const fc = side === inward ? 0xd8d0c0 : 0x5a4a3a;
+    box(1.0, 0.06, 0.04, fc, 0, 0.48, 0.01, g); box(1.0, 0.06, 0.04, fc, 0, -0.48, 0.01, g);
+    box(0.06, 1.0, 0.04, fc, 0.48, 0, 0.01, g); box(0.06, 1.0, 0.04, fc, -0.48, 0, 0.01, g);
+    box(0.03, 0.9, 0.03, fc, 0, 0, 0.01, g); box(0.9, 0.03, 0.03, fc, 0, 0, 0.01, g);
+    if (side === inward) box(1.1, 0.04, 0.12, fc, 0, -0.52, 0.05, g); // подоконник
+    // луна в стекле — лёгкий блик
+    const glint = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.4), new THREE.MeshBasicMaterial({ color: 0x3a4c78, transparent: true, opacity: 0.6 }));
+    glint.position.set(-0.2, 0.15, 0.002); glint.rotation.z = 0.5; g.add(glint);
+    scene.add(g);
+  }
+}
+
+function paintingTex() {
+  const c = document.createElement('canvas'); c.width = 96; c.height = 72;
+  const x = c.getContext('2d');
+  const kind = Math.floor(Math.random() * 3);
+  if (kind === 0) { // пейзаж
+    const gr = x.createLinearGradient(0, 0, 0, 72); gr.addColorStop(0, pick(['#5a6a8a', '#8a6a4a', '#4a5a4a'])); gr.addColorStop(1, '#2a2a20');
+    x.fillStyle = gr; x.fillRect(0, 0, 96, 72);
+    x.fillStyle = '#1a2a1a'; x.beginPath(); x.moveTo(0, 50); for (let i = 0; i <= 96; i += 12) x.lineTo(i, 38 + Math.random() * 16); x.lineTo(96, 72); x.lineTo(0, 72); x.fill();
+    x.fillStyle = '#e8e0c0'; x.beginPath(); x.arc(70, 18, 6, 0, 7); x.fill();
+  } else if (kind === 1) { // портрет
+    x.fillStyle = '#2a1e18'; x.fillRect(0, 0, 96, 72);
+    x.fillStyle = '#3a2a22'; x.beginPath(); x.ellipse(48, 72, 30, 22, 0, 0, 7); x.fill();
+    x.fillStyle = '#b89a80'; x.beginPath(); x.ellipse(48, 32, 13, 17, 0, 0, 7); x.fill();
+    x.fillStyle = '#111'; x.fillRect(41, 29, 4, 3); x.fillRect(51, 29, 4, 3);
+    x.fillStyle = '#2a1a10'; x.beginPath(); x.ellipse(48, 18, 15, 8, 0, Math.PI, 0); x.fill();
+  } else { // натюрморт
+    x.fillStyle = '#3a3428'; x.fillRect(0, 0, 96, 72);
+    x.fillStyle = '#6a2a20'; x.beginPath(); x.arc(36, 46, 12, 0, 7); x.fill();
+    x.fillStyle = '#a08a30'; x.beginPath(); x.arc(56, 50, 9, 0, 7); x.fill();
+    x.fillStyle = '#4a5a6a'; x.fillRect(62, 22, 10, 30);
+  }
+  return new THREE.CanvasTexture(c);
+}
+
+function paintingAt(scene, x, z, rotY) {
+  const g = new THREE.Group();
+  g.position.set(x, 1.6, z); g.rotation.y = rotY;
+  box(0.62, 0.48, 0.03, pick([0x6a4a20, 0x2a2018, 0x8a7040]), 0, 0, 0.015, g);
+  const pic = new THREE.Mesh(new THREE.PlaneGeometry(0.54, 0.4), new THREE.MeshLambertMaterial({ map: paintingTex() }));
+  pic.position.z = 0.032; g.add(pic);
+  g.rotation.z = rand(-0.04, 0.04);
+  scene.add(g);
+}
+
+function buildDecor(scene) {
+  windowAt(scene, 1.8, 0, true, 1);
+  windowAt(scene, 7.5, 0, true, 1);
+  windowAt(scene, 13.5, 0, true, 1);
+  windowAt(scene, 16, 5.0, false, -1);
+  windowAt(scene, 0, 9.2, false, 1);
+  windowAt(scene, 3.0, 10, true, -1);
+  windowAt(scene, 16, 8.6, false, -1);
+  windowAt(scene, 12.8, 10, true, -1);
+  paintingAt(scene, 6.5, 9.93, Math.PI);
+  paintingAt(scene, 15.93, 2.2, -Math.PI / 2);
+  paintingAt(scene, 5.07, 3.0, Math.PI / 2);
+  paintingAt(scene, 5.07, 5.5, Math.PI / 2);
+  paintingAt(scene, 13.0, 6.07, 0);
+  paintingAt(scene, 0.07, 2.6, Math.PI / 2);
+  paintingAt(scene, 9.93, 9.3, -Math.PI / 2);
+  // плинтусы по периметру комнат (только наружные стены)
+  const bm = 0x3a2c22;
+  box(MW, 0.08, 0.02, bm, MW / 2, 0.04, 0.075, scene);
+  box(MW, 0.08, 0.02, bm, MW / 2, 0.04, MH - 0.075, scene);
+  box(0.02, 0.08, MH, bm, 0.075, 0.04, MH / 2, scene);
+  box(0.02, 0.08, MH, bm, MW - 0.075, 0.04, MH / 2, scene);
 }
 
 // ---------- коллизии ----------

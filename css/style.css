@@ -175,3 +175,18 @@ body.mirroring #mirrorView { display: block; }
 .board-answer { font: 700 22px serif !important; color: #e8c890 !important; min-height: 1.6em; }
 #cursedBtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 #cursedBtns .btn { margin: 0; font-size: 14px; padding: 10px; }
+
+/* ---------- сложность и профиль ---------- */
+.profile { color: var(--accent) !important; font-size: 13px !important; margin: 0 0 8px; }
+.diffs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.diffs button { padding: 8px 2px; font-size: 12px; border-radius: 10px; border: 1px solid var(--line); background: #151c2a; color: var(--text); }
+.diffs button.sel { background: #2c6a50; border-color: #3f8a6a; }
+.diffs button small { display: block; font-size: 10px; color: var(--muted); }
+.diffdesc { min-height: 3em; margin: 6px 0 !important; }
+body:not(.land) .diffs { grid-template-columns: repeat(3, 1fr); }
+/* ---------- эффекты рассудка ---------- */
+#sanityFx { position: fixed; inset: 0; z-index: 3; pointer-events: none; opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(20,0,10,0.95) 100%); transition: opacity 1s; }
+#grain { position: fixed; top: -50%; left: -50%; width: 200%; height: 200%; z-index: 3; pointer-events: none; opacity: 0.06; animation: grain 0.5s steps(4) infinite; }
+@keyframes grain { 0% { transform: translate(0,0); } 25% { transform: translate(-6%,4%); } 50% { transform: translate(5%,-3%); } 75% { transform: translate(-3%,-6%); } }
+@media (prefers-reduced-motion: reduce) { #grain { animation: none; } }

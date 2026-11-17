@@ -1,6 +1,7 @@
 // Точка входа: рендер, управление, игровой цикл
 import * as THREE from 'three';
-import { G, rand, clamp, toast, pick } from './state.js';
+import { G, rand, clamp, toast, pick, DIFFS } from './state.js';
+import * as AP from './appliances.js';
 import * as W from './world.js';
 import { initAudio, sfx, setWindIndoor, suspendAudio, setStatic, setHuntAudio, updateAudio } from './audio.js';
 import * as I from './items.js';
@@ -37,6 +38,7 @@ camera.add(photoLight);
 
 W.buildWorld(scene);
 I.initItems(scene, camera, W.van.rackSlots);
+AP.buildAppliances(scene);
 
 // случайный призрак
 const forced = new URLSearchParams(location.search).get('ghost');
@@ -211,6 +213,7 @@ function findTarget() {
       case 'item': if (u.item.placed) return { kind: 'item', item: u.item, label: 'Взять: ' + u.item.def.name }; break;
       case 'rack': return { kind: 'rack', label: 'Снаряжение' };
       case 'cursed': return { kind: 'cursed', label: CU.cursedPrompt() };
+      case 'appliance': return { kind: 'appliance', app: u.app, label: AP.appliancePrompt(u.app) };
       case 'rackItem': {
         const n = G.stock[u.type], d = I.ITEM_DEFS[u.type];
         return { kind: 'rackItem', type: u.type, label: n ? `Взять: ${d.name} (${n} шт.)` : `${d.name}: закончились` };
@@ -260,6 +263,7 @@ function interact() {
     case 'rack': UI.openScreen('vanMenu'); break;
     case 'rackItem': I.takeFromStock(t.type); break;
     case 'cursed': CU.useCursed(); break;
+    case 'appliance': AP.toggleAppliance(t.app); break;
     case 'vjournal': UI.openScreen('journal'); break;
     case 'leave': {
       const g = GHOSTS.find(x => x.id === G.journal.guess);
@@ -348,7 +352,7 @@ function updateSanity(dt) {
   if (gh.m.stillDrain && !p.moving && gh.distTo(p.x, p.z) < 6) drain += 0.25;
   if (gh.m.drainNear && gh.distTo(p.x, p.z) < 5) drain += 0.15;
   if (gh.m.homebody && p.room === gh.home) drain *= 2;
-  G.sanity = Math.max(0, G.sanity - drain * dt);
+  G.sanity = Math.max(0, G.sanity - drain * G.diff.drain * dt);
 }
 
 // ---------- освещение / эффекты ----------
@@ -400,6 +404,67 @@ function takePhotoNow() {
   toast('📷 ' + res.label + (res.stars ? ' ' + '★'.repeat(res.stars) : ''));
 }
 
+// ---------- атмосфера ----------
+const dust = (() => {
+  const n = 160, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n * 3; i++) pos[i] = (Math.random() - 0.5) * 6;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const pts = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xbfae90, size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0.5, depthWrite: false }));
+  pts.frustumCulled = false;
+  scene.add(pts);
+  return pts;
+})();
+const puffs = [];
+let breathT = 0;
+const grainEl = $('grain'), sanityFxEl = $('sanityFx');
+(() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const x = c.getContext('2d'), img = x.createImageData(128, 128);
+  for (let i = 0; i < img.data.length; i += 4) { const v = Math.random() * 255; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255; }
+  x.putImageData(img, 0, 0);
+  grainEl.style.backgroundImage = `url(${c.toDataURL()})`;
+})();
+
+function updateAtmosphere(dt) {
+  const p = G.player;
+  // пылинки вокруг игрока, видны в доме при включённом фонаре
+  dust.visible = p.inHouse && p.flashlight;
+  if (dust.visible) {
+    const a = dust.geometry.attributes.position;
+    for (let i = 0; i < a.count; i++) {
+      let x = a.getX(i) + Math.sin(G.t * 0.3 + i) * 0.002, y = a.getY(i) - 0.0015, z = a.getZ(i);
+      if (y < -1.5) y = 1;
+      a.setXYZ(i, x, y, z);
+    }
+    a.needsUpdate = true;
+    dust.position.set(Math.round(p.x * 2) / 2, 1.4, Math.round(p.z * 2) / 2);
+  }
+  // пар изо рта в холодной комнате
+  const temp = p.inHouse ? G.temps[p.room] : 8;
+  breathT -= dt;
+  if (temp < 4 && breathT <= 0 && !p.dead) {
+    breathT = 2.6;
+    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.05, 0), new THREE.MeshBasicMaterial({ color: 0xdde6ee, transparent: true, opacity: 0.35, depthWrite: false }));
+    const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+    m.position.set(p.x + fx * 0.25, 1.5, p.z + fz * 0.25);
+    scene.add(m);
+    puffs.push({ m, life: 1.4, vx: fx * 0.25, vz: fz * 0.25 });
+  }
+  for (let i = puffs.length - 1; i >= 0; i--) {
+    const f = puffs[i];
+    f.life -= dt;
+    f.m.position.x += f.vx * dt; f.m.position.z += f.vz * dt; f.m.position.y += dt * 0.05;
+    f.m.scale.multiplyScalar(1 + dt * 1.6);
+    f.m.material.opacity = Math.max(0, f.life / 1.4 * 0.35);
+    if (f.life <= 0) { scene.remove(f.m); f.m.geometry.dispose(); f.m.material.dispose(); puffs.splice(i, 1); }
+  }
+  // чем ниже рассудок, тем темнее края экрана и сильнее зерно
+  const ins = p.inHouse ? 1 - G.sanity / 100 : 0;
+  sanityFxEl.style.opacity = (Math.max(0, ins - 0.3) * 0.9 + (G.ghost.hunting ? 0.25 : 0)).toFixed(2);
+  grainEl.style.opacity = (0.04 + ins * 0.1 + (G.ghost.hunting ? 0.06 : 0)).toFixed(3);
+}
+
 // ---------- смерть / конец ----------
 let deathT = -1;
 G.onPropImpact = (pr, speed) => sfx.impact(pr.mesh.position.x, pr.mesh.position.z, pr.snd, speed);
@@ -428,8 +493,37 @@ UI.initUI({ pause, resume, leave });
 // ---------- старт ----------
 $('sens').addEventListener('input', (e) => { G.settings.sens = +e.target.value; });
 $('quality').addEventListener('change', (e) => { quality = +e.target.value; applyQuality(); });
+// ---------- профиль и сложность ----------
+function loadProfile() { try { return JSON.parse(localStorage.getItem('phathma.profile')) || { money: 0, xp: 0, games: 0 }; } catch (_) { return { money: 0, xp: 0, games: 0 }; } }
+G.profile = loadProfile();
+G.saveProfile = () => { try { localStorage.setItem('phathma.profile', JSON.stringify(G.profile)); } catch (_) { /* */ } };
+$('profile').textContent = `Уровень ${Math.floor(G.profile.xp / 150) + 1} · $${G.profile.money} · расследований: ${G.profile.games}`;
+try { const d = localStorage.getItem('phathma.diff'); if (DIFFS[d]) G.diffKey = d; } catch (_) { /* */ }
+function renderDiffs() {
+  const box = $('diffs'); box.innerHTML = '';
+  for (const k in DIFFS) {
+    const b = document.createElement('button');
+    b.className = k === G.diffKey ? 'sel' : '';
+    b.innerHTML = `${DIFFS[k].name}<small>×${DIFFS[k].reward} $</small>`;
+    b.onclick = () => { G.diffKey = k; try { localStorage.setItem('phathma.diff', k); } catch (_) { /* */ } renderDiffs(); };
+    box.appendChild(b);
+  }
+  $('diffDesc').textContent = DIFFS[G.diffKey].desc;
+}
+renderDiffs();
+
+function applyDifficulty() {
+  const D = G.diff = DIFFS[G.diffKey];
+  G.sanity = D.sanity;
+  if (D.powerOff) G.power = false;
+  for (const k in I.ITEM_DEFS) G.stock[k] = Math.max(1, Math.round(I.ITEM_DEFS[k].stock * D.stock));
+  I.refreshRack();
+  G.ghost.applyDifficulty(D);
+}
+
 $('btnStart').addEventListener('click', () => {
   initAudio();
+  applyDifficulty();
   UI.hide('menu');
   UI.show('hud');
   G.running = true;
@@ -487,6 +581,8 @@ function frame(now) {
     W.updateLights(G.t);
     I.updateItems(dt);
     CU.updateCursed(dt);
+    AP.updateAppliances(dt);
+    updateAtmosphere(dt);
     updateEffects(dt);
     // сердцебиение при охоте рядом
     const gh = G.ghost;

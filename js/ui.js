@@ -80,6 +80,7 @@ export function renderJournal() {
   const gh = G.ghost;
   let html = `<h3>Дело</h3><div class="obj">Имя призрака: <b>${gh.fullName}</b>, возраст при смерти: ${gh.age}</div>`;
   html += '<div class="obj">В доме спрятан проклятый предмет. Он может многое рассказать о призраке — но дорого обойдётся.</div>';
+  html += `<div class="obj">Сложность: <b>${G.diff.name}</b> · призрак оставляет улик: <b>${G.diff.evidence}</b> из 3</div>`;
   html += '<h3>Задания</h3>';
   html += `<div class="obj ${G.journal.guess ? 'done' : ''}">${G.journal.guess ? '✓' : '○'} Определить тип призрака (выбрать в журнале)</div>`;
   for (const o of G.objectives) html += `<div class="obj ${G.done[o.id] ? 'done' : ''}">${G.done[o.id] ? '✓' : '○'} ${o.text}</div>`;
@@ -174,6 +175,16 @@ export function showResult(dead) {
   const best = G.photos.reduce((a, p) => a + p.stars, 0);
   if (best) { money += best * 10; lines.push(`Фотографии (${best}★): +$${best * 10}`); }
   if (dead) { money = Math.round(money * 0.5); lines.push('<span class="bad-text">Вы погибли — награда уменьшена вдвое</span>'); }
+  const mul = G.diff.reward;
+  if (mul !== 1) lines.push(`Сложность «${G.diff.name}»: ×${mul}`);
+  money *= mul;
+  if (G.profile && !G.rewarded) {
+    G.rewarded = true;
+    G.profile.money += money; G.profile.xp += money + (correct ? 20 : 0); G.profile.games++;
+    G.saveProfile();
+    lines.push(`Всего на счету: $${G.profile.money} · уровень ${Math.floor(G.profile.xp / 150) + 1}`);
+  }
+  if (gh.hidden && gh.hidden.length) lines.push(`<span style="color:var(--muted)">Скрытые улики: ${gh.hidden.map(e => EVIDENCE[e].name).join(', ')}</span>`);
   $('resultBody').innerHTML = `
     <h2>${dead ? 'Вас настиг призрак' : 'Расследование завершено'}</h2>
     <p>Это был</p>

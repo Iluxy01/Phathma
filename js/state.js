@@ -45,6 +45,24 @@ export const EVIDENCE = {
   evp:  { name: 'Голос на диктофоне',    short: 'Диктофон' },
 };
 
+// уровни сложности
+export const DIFFS = {
+  amateur:   { name: 'Любитель',     evidence: 3, drain: 0.7, setup: 240, huntMul: 0.85, speedMul: 0.95, grace: 5,   sanity: 100, reward: 1, stock: 1,   powerOff: false, roomChange: false, sanityBoard: true,
+    desc: 'Все 3 улики. Рассудок падает медленно, 4 минуты на подготовку без охот, долгая отсрочка в начале охоты.' },
+  inter:     { name: 'Опытный',      evidence: 3, drain: 1.0, setup: 120, huntMul: 1.0,  speedMul: 1.0,  grace: 4,   sanity: 100, reward: 2, stock: 1,   powerOff: false, roomChange: false, sanityBoard: true,
+    desc: 'Все 3 улики. 2 минуты на подготовку. Стандартные охоты.' },
+  pro:       { name: 'Профессионал', evidence: 3, drain: 1.3, setup: 30,  huntMul: 1.15, speedMul: 1.05, grace: 3,   sanity: 100, reward: 3, stock: 1,   powerOff: true,  roomChange: true,  sanityBoard: true,
+    desc: 'Все 3 улики, но щиток выключен, призрак может сменить комнату, охоты длиннее и быстрее.' },
+  nightmare: { name: 'Кошмар',       evidence: 2, drain: 1.6, setup: 0,   huntMul: 1.3,  speedMul: 1.1,  grace: 2.5, sanity: 100, reward: 5, stock: 0.6, powerOff: true,  roomChange: true,  sanityBoard: true,
+    desc: 'Призрак оставляет только 2 улики из 3 — опирайтесь на его поведение. Меньше снаряжения, охоты сразу.' },
+  insane:    { name: 'Безумие',      evidence: 1, drain: 2.0, setup: 0,   huntMul: 1.5,  speedMul: 1.15, grace: 2,   sanity: 75,  reward: 8, stock: 0.5, powerOff: true,  roomChange: true,  sanityBoard: false,
+    desc: 'Всего 1 улика, рассудок начинается с 75% и не виден на табло. Только для тех, кто знает призраков наизусть.' },
+};
+G.diffKey = 'inter';
+G.diff = DIFFS.inter;
+G.activity = [];   // активность призрака по 5-секундным отрезкам
+G.actNow = 0;
+
 export const rand = (a, b) => a + Math.random() * (b - a);
 export const randi = (a, b) => Math.floor(rand(a, b + 1));
 export const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];

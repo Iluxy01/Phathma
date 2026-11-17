@@ -480,6 +480,27 @@ export const sfx = {
     voice(g, t + 0.1, { f0: f0 * 0.8, f0End: f0 * 1.25, dur: rnd(0.7, 1.1), vowels: [vs[Math.floor(rnd(0, 5))], vs[Math.floor(rnd(0, 5))], vs[Math.floor(rnd(0, 5))]], vol: 0.8, vib: 3, rasp: 0.9 });
     nz(d, t, { buf: PINK, f: 2000, q: 0.6, dur: 1.4, a: 0.3, vol: 0.12 });
   },
+  rattle(x, z) {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(x, z, 1.2, 1.2);
+    for (let i = 0; i < 7; i++) {
+      const tt = t + i * 0.13 + rnd(0, 0.04);
+      osc(d, tt, { f: rnd(140, 190), fEnd: 100, dur: 0.08, vol: 0.5 });
+      nz(d, tt, { f: rnd(1200, 2400), q: 4, dur: 0.05, vol: 0.4 });
+    }
+  },
+  tvStatic(x, z) {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(x, z, 0.9, 0.6);
+    nz(d, t, { type: 'bandpass', f: 3000, q: 0.4, dur: 1.5, a: 0.05, vol: 0.18 });
+    osc(d, t, { type: 'sine', f: 15600, dur: 1.5, a: 0.05, vol: 0.01 });
+  },
+  water(x, z) {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(x, z, 0.9, 0.8);
+    nz(d, t, { buf: PINK, type: 'bandpass', f: 1800, q: 0.6, dur: 1.1, a: 0.1, vol: 0.35 });
+    for (let i = 0; i < 6; i++) osc(d, t + rnd(0, 0.9), { f: rnd(600, 1600), fEnd: rnd(1600, 2600), dur: 0.05, vol: 0.03 });
+  },
   musicBox(x, z, dur = 9) {
     if (!ctx) return;
     const t = ctx.currentTime, d = route(x, z, 0.8, 1.6);
