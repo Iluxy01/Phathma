@@ -40,3 +40,14 @@ python3 -m http.server 8000
 - `js/main.js` — рендер, управление, игровой цикл
 - `js/cursed.js` — проклятые предметы
 - `js/screen.js` — принудительная горизонтальная ориентация и редактор раскладки
+
+## Один файл без сервера
+
+`dist/phathma.html` — вся игра (вместе с Three.js) в одном файле. Его можно просто открыть в браузере двойным щелчком, интернет и сервер не нужны.
+
+Пересборка после изменений кода:
+
+```
+npx esbuild@0.20.2 js/main.js --bundle --format=iife --minify --alias:three=./lib/three.module.min.js --outfile=/tmp/game.js
+python3 tools/build_single.py /tmp/game.js
+```
