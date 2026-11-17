@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#070a12">
+<title>Phathma</title>
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">{ "imports": { "three": "./lib/three.module.min.js" } }</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="nv"><span>● REC</span></div>
+<div id="hideOverlay"></div>
+<div id="flash"></div>
+<div id="death"></div>
+
+<div id="hud" class="hidden">
+  <div id="touch"></div>
+  <div id="topbar">
+    <button id="btnPause" class="tb">❚❚</button>
+    <button id="btnJournal" class="tb">📖 Журнал</button>
+  </div>
+  <div id="toast"></div>
+  <div id="cross"></div>
+  <div id="prompt"></div>
+  <div id="stamina"><i></i></div>
+  <div id="readout"></div>
+  <div id="slots">
+    <div class="slot" data-i="0"></div>
+    <div class="slot" data-i="1"></div>
+    <div class="slot" data-i="2"></div>
+  </div>
+  <div id="joyHint"></div>
+  <div id="joy"><div id="joyKnob"></div></div>
+  <button id="bInteract" class="gb big">✋<small>Действие</small></button>
+  <button id="bUse" class="gb">⚡<small id="useLbl">Исп.</small></button>
+  <button id="bDrop" class="gb sm">⬇<small>Положить</small></button>
+  <button id="bLight" class="gb sm">🔦<small>Фонарь</small></button>
+  <button id="bSprint" class="gb sm">🏃<small>Бег</small></button>
+  <button id="bAsk" class="gb pill hidden">🗣 Спросить</button>
+</div>
+
+<!-- Главное меню -->
+<div id="menu" class="screen">
+  <div class="panel center">
+    <h1>PHATHMA</h1>
+    <p class="sub">охота на призраков · низкополигональный хоррор</p>
+    <button class="btn primary" id="btnStart">Начать расследование</button>
+    <button class="btn" id="btnHelp">Как играть</button>
+    <label class="row">Чувствительность обзора <input type="range" id="sens" min="0.4" max="2.5" step="0.1" value="1"></label>
+    <label class="row">Качество графики
+      <select id="quality"><option value="0.75">Низкое</option><option value="1" selected>Среднее</option><option value="1.5">Высокое</option></select>
+    </label>
+    <p class="hint">Лучше играть в наушниках и в горизонтальной ориентации.</p>
+  </div>
+</div>
+
+<div id="help" class="screen hidden">
+  <div class="panel scroll">
+    <h2>Как играть</h2>
+    <p>Вы — охотник за привидениями. В доме обитает призрак. Соберите <b>улики</b>, отметьте их в журнале, определите <b>тип призрака</b> и уезжайте на фургоне.</p>
+    <h3>Управление</h3>
+    <p><b>Левая половина экрана</b> — ходьба (джойстик). <b>Правая</b> — обзор. ✋ — открыть дверь, щёлкнуть выключатель, взять предмет, спрятаться в шкаф. ⚡ — использовать предмет в руке. ⬇ — положить предмет. Слоты внизу — переключение предметов (их можно держать 3).</p>
+    <p>На ПК: WASD, мышь (зажать и тянуть), E — действие, R — использовать, G — положить, F — фонарь, T — спросить, 1-3 — слоты, J — журнал, Shift — бег.</p>
+    <h3>Улики</h3>
+    <ul>
+      <li><b>ЭМП 5</b> — ЭМП-детектор показывает 5 делений рядом с местом, где призрак что-то сделал.</li>
+      <li><b>Радиоприёмник</b> — в тёмной комнате рядом с призраком включите приёмник и задавайте вопросы.</li>
+      <li><b>Минусовая температура</b> — термометр показывает ниже 0 °C в комнате призрака.</li>
+      <li><b>Отпечатки (УФ)</b> — посветите УФ-фонарём на двери и выключатели, которые трогал призрак, или на следы на соли.</li>
+      <li><b>Записи в блокноте</b> — положите блокнот в комнате призрака, он может что-то написать.</li>
+      <li><b>Призрачные огни</b> — видны только через видеокамеру (ночное видение) в комнате призрака. Поставленную камеру можно смотреть на мониторе в фургоне.</li>
+    </ul>
+    <h3>Рассудок и охота</h3>
+    <p>В темноте внутри дома рассудок падает (виден на табло в фургоне). Когда он низкий, призрак начинает <b>охоту</b>: входная дверь запирается, свет мигает, слышны шаги. Бегите, прячьтесь в шкаф и <b>выключайте электронику</b> (фонарь тоже!) — призрак чувствует её на расстоянии ~7 м. Благовония ослепляют призрака во время охоты, а вне охоты отпугивают его на 90 с. Распятие на полу рядом с призраком не даёт начать охоту. Успокоительное восстанавливает рассудок.</p>
+    <button class="btn primary" data-close="help">Понятно</button>
+  </div>
+</div>
+
+<div id="journal" class="screen hidden">
+  <div class="panel wide">
+    <div class="tabs">
+      <button class="tab active" data-tab="ev">Улики</button>
+      <button class="tab" data-tab="info">Задания</button>
+      <button class="tab" data-tab="photos">Фото</button>
+      <button class="tab close" data-close="journal">✕</button>
+    </div>
+    <div class="tabpage" id="tab-ev">
+      <div id="evList"></div>
+      <div id="ghostList"></div>
+      <div id="ghostInfo"></div>
+    </div>
+    <div class="tabpage hidden" id="tab-info"></div>
+    <div class="tabpage hidden" id="tab-photos"></div>
+  </div>
+</div>
+
+<div id="vanMenu" class="screen hidden">
+  <div class="panel wide">
+    <div class="tabs"><b class="title">Снаряжение</b><button class="tab close" data-close="vanMenu">✕</button></div>
+    <div class="vancols">
+      <div id="stockList"></div>
+      <div id="invList"></div>
+    </div>
+  </div>
+</div>
+
+<div id="pause" class="screen hidden">
+  <div class="panel center">
+    <h2>Пауза</h2>
+    <button class="btn primary" id="btnResume">Продолжить</button>
+    <button class="btn" id="btnHelp2">Как играть</button>
+    <button class="btn" id="btnRestart">Новая игра</button>
+  </div>
+</div>
+
+<div id="leaveConfirm" class="screen hidden">
+  <div class="panel center">
+    <h2>Уехать?</h2>
+    <p id="leaveText"></p>
+    <button class="btn primary" id="btnLeaveYes">Уехать</button>
+    <button class="btn" data-close="leaveConfirm">Остаться</button>
+  </div>
+</div>
+
+<div id="result" class="screen hidden">
+  <div class="panel scroll center" id="resultBody"></div>
+</div>
+
+<div id="loading">Загрузка…</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
