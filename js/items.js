@@ -18,12 +18,16 @@ export const ITEM_DEFS = {
   pills:    { name: 'Успокоительное',  icon: '💊', stock: 3 },
   motion:   { name: 'Датчик движения', icon: '📡', electronic: true, stock: 2 },
   mic:      { name: 'Направл. микрофон', icon: '🎙️', electronic: true, toggle: true, stock: 1 },
+  laser:    { name: 'Лазерный проектор', icon: '🟩', electronic: true, stock: 2 },
+  candle:   { name: 'Свеча',           icon: '🕯️', stock: 3 },
+  recorder: { name: 'Диктофон',        icon: '⏺️', electronic: true, toggle: true, stock: 2 },
 };
 
 const USE_LABEL = {
   emf: 'Вкл/Выкл', box: 'Вкл/Выкл', uv: 'Вкл/Выкл', video: 'Вкл/Выкл', mic: 'Вкл/Выкл',
   thermo: '—', book: 'Положить', photo: 'Снимок', crucifix: 'Положить', smudge: 'Поджечь',
   salt: 'Насыпать', pills: 'Принять', motion: 'Установить',
+  laser: 'Установить', candle: 'Зажечь', recorder: 'Запись',
 };
 export function useLabel(it) { return it ? USE_LABEL[it.type] : '—'; }
 
@@ -163,6 +167,31 @@ function buildMesh(it) {
       d.led.position.set(0, 0.045, -0.022); g.add(d.led);
       break;
     }
+    case 'laser': {
+      box(0.09, 0.07, 0.07, 0x2a3a2a, 0, 0.035, 0, g);
+      d.lens = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.02, 8), emissive(0x0a200a));
+      d.lens.rotation.x = Math.PI / 2; d.lens.position.set(0, 0.04, -0.04); g.add(d.lens);
+      box(0.012, 0.02, 0.012, 0x888888, 0.03, 0.08, 0.02, g);
+      break;
+    }
+    case 'candle': {
+      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.025, 0.12, 7), mat(0xf0e6c8));
+      w.position.y = 0.06; g.add(w);
+      const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.01, 8), mat(0x8a7a50));
+      plate.position.y = 0.005; g.add(plate);
+      d.flame = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.045, 5), new THREE.MeshBasicMaterial({ color: 0xffa030, fog: false }));
+      d.flame.position.y = 0.145; d.flame.visible = false; g.add(d.flame);
+      d.burn = 180;
+      break;
+    }
+    case 'recorder': {
+      box(0.05, 0.02, 0.11, 0x303036, 0, 0.01, 0, g);
+      box(0.035, 0.004, 0.035, 0x111111, 0, 0.021, -0.025, g);
+      d.led = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.006, 0.008), emissive(0x330000));
+      d.led.position.set(0.015, 0.022, 0.03); g.add(d.led);
+      d.caught = [];
+      break;
+    }
     case 'mic': {
       const dish = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.06, 8, 1, true), mat(0x9aa0a8, { side: THREE.DoubleSide }));
       dish.rotation.x = Math.PI / 2; dish.position.set(0, 0.1, -0.06); g.add(dish);
@@ -266,6 +295,19 @@ const IMPACT = { book: 'soft', smudge: 'soft', crucifix: 'metal' };
 // цилиндрические предметы при падении ложатся на бок
 const ROLLS = new Set(['salt', 'pills', 'smudge', 'uv']);
 
+// аккуратно поставить предмет перед собой
+export function placeSelectedNeat() {
+  const it = selected();
+  if (!it) return;
+  const p = G.player;
+  if (p.hidden) { toast('Нельзя положить в шкафу'); return; }
+  if (it.type === 'box') setStatic(false);
+  const { x, z } = placePos();
+  removeFromInv(it);
+  placeItem(it, x, z, p.yaw);
+  sfx.impact(x, z, IMPACT[it.type] || 'plastic', 0.3);
+}
+
 // бросок: предмет вылетает из руки и падает на пол по дуге
 const flying = [];
 const tmpW = new THREE.Vector3();
@@ -275,13 +317,7 @@ export function dropSelected() {
   const p = G.player;
   if (p.hidden) { toast('Нельзя положить в шкафу'); return; }
   if (it.type === 'box') setStatic(false);
-  if (it.type === 'video') {
-    // камеру ставим аккуратно на штатив
-    const { x, z } = placePos();
-    removeFromInv(it);
-    placeItem(it, x, z, p.yaw);
-    return;
-  }
+  if (it.type === 'video' || it.type === 'laser') { placeSelectedNeat(); return; }
   if (it.mesh.parent === camera) it.mesh.getWorldPosition(tmpW);
   else tmpW.set(p.x, 1.4, p.z);
   removeFromInv(it);
@@ -339,7 +375,20 @@ export function placeItem(it, x, z, yaw, lying = false) {
   it.placed = true;
   it.x = x; it.z = z;
   it.room = roomAt(x, z);
-  if (it.type === 'motion' || it.type === 'video') { it.on = true; }
+  if (it.type === 'motion' || it.type === 'video' || it.type === 'laser') { it.on = true; }
+  if (it.type === 'laser') {
+    if (!it.data.grid) {
+      const pts = [];
+      for (let gx = -2.4; gx <= 2.4; gx += 0.2) for (let gz = -2.4; gz <= 2.4; gz += 0.2) {
+        if (Math.hypot(gx, gz) < 2.4) pts.push(gx + rand(-0.02, 0.02), 0.03, gz + rand(-0.02, 0.02));
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      it.data.grid = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0x30ff50, size: 2.5, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.8 }));
+    }
+    it.data.grid.position.set(x, 0, z);
+    scene.add(it.data.grid);
+  }
   const m = it.mesh;
   m.scale.setScalar(it.type === 'video' ? 1 : 1.4);
   m.rotation.set(0, yaw, 0, 'YXZ');
@@ -381,6 +430,12 @@ export function pickup(it) {
   const ii = interactables.indexOf(it.mesh); if (ii >= 0) interactables.splice(ii, 1);
   scene.remove(it.mesh);
   if (it.data.tripod) scene.remove(it.data.tripod);
+  if (it.data.grid) scene.remove(it.data.grid);
+  if (it.type === 'laser') it.on = false;
+  if (it.type === 'recorder' && it.on && it.data.caught.length) {
+    toast('🎙 На записи голоса: «' + it.data.caught.join('», «') + '»', 4);
+    sfx.evp();
+  } else if (it.type === 'recorder' && it.on) toast('🎙 На записи только шум');
   it.placed = false;
   it.mesh.scale.setScalar(1);
   if (it.type === 'motion') it.on = false;
@@ -400,7 +455,16 @@ export function useSelected() {
       if (it.type === 'box') setStatic(it.on);
       break;
     case 'thermo': toast('Термометр всегда включён'); break;
-    case 'book': case 'crucifix': case 'motion': dropSelected(); break;
+    case 'book': case 'crucifix': case 'motion': case 'laser': placeSelectedNeat(); break;
+    case 'recorder':
+      it.on = !it.on; sfx.click();
+      if (it.on) { it.data.since = G.t; it.data.caught = []; it.data.next = G.t + 4; }
+      break;
+    case 'candle':
+      if (it.data.burn <= 0) { toast('Свеча догорела'); return; }
+      it.data.lit = !it.data.lit;
+      if (it.data.lit) sfx.lighter(); else sfx.puff(p.x, p.z);
+      break;
     case 'photo':
       if (it.charges <= 0) { toast('Плёнка закончилась'); return; }
       it.charges--; G.pendingPhoto = true; sfx.shutter();
@@ -593,9 +657,22 @@ export function updateItems(dt) {
       case 'crucifix': G.readout = { kind: 'text', text: 'Зарядов: ' + it.charges }; break;
       case 'salt': G.readout = { kind: 'text', text: 'Соли: ' + it.charges }; break;
       case 'smudge': G.readout = { kind: 'text', text: it.data.used ? (G.t < it.data.burnUntil ? 'Горит…' : 'Сгорели') : 'Готовы' }; break;
+      case 'laser': G.readout = { kind: 'text', text: 'Поставьте на пол в комнате призрака' }; break;
+      case 'candle':
+        G.readout = { kind: 'text', text: it.data.burn <= 0 ? 'Догорела' : it.data.lit ? (it.data.blue ? '🔵 Пламя синее!' : '🔥 Горит ' + Math.ceil(it.data.burn) + ' с') : 'Не горит' };
+        break;
+      case 'recorder': {
+        if (!it.on) { G.readout = { kind: 'text', text: 'выключен' }; break; }
+        const sec = Math.floor(G.t - it.data.since);
+        const fresh = G.t - (it.data.catchT || -99) < 4;
+        const bars = Array.from({ length: 8 }, () => '▁▂▃▄▅▆▇'[Math.floor(Math.random() * (fresh ? 7 : 3))]).join('');
+        G.readout = { kind: 'text', text: `● ${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')} ${bars}` + (fresh ? ' «' + it.data.caught[it.data.caught.length - 1] + '»' : '') };
+        break;
+      }
       default: G.readout = { kind: 'text', text: it.def.name };
     }
   }
+  updateNewEvidenceItems(dt);
   if (readTimer <= 0) readTimer = 0.5;
 
   // предметы на полу
@@ -655,6 +732,45 @@ export function updateItems(dt) {
 
 function setLeds(it, lvl) {
   it.data.leds.forEach((m, i) => m.material.color.setHex(i < lvl ? m.userData.on : 0x222222));
+}
+
+// свечи, диктофоны, лазеры
+const EVP_WORDS = ['…помоги…', '…уходи…', '…холодно…', '…я здесь…', '…мама…', '…темно…', '…не трогай…', '…больно…'];
+function updateNewEvidenceItems(dt) {
+  const gh = G.ghost, p = G.player;
+  const held = selected();
+  for (const it of [...G.inv, ...G.placed]) {
+    if (!it) continue;
+    const x = it.placed ? it.x : p.x, z = it.placed ? it.z : p.z;
+    const d = gh ? Math.hypot(gh.x - x, gh.z - z) : 99;
+    if (it.type === 'candle') {
+      const f = it.data.flame;
+      if (it.data.lit) {
+        it.data.burn -= dt;
+        if (it.data.burn <= 0) { it.data.lit = false; it.data.burn = 0; }
+      }
+      f.visible = !!it.data.lit;
+      if (f.visible) {
+        it.data.blue = gh && gh.has('flame') && !gh.hunting && d < 3.5;
+        f.material.color.setHex(it.data.blue ? 0x4a78ff : (Math.random() < 0.8 ? 0xffa030 : 0xffd060));
+        f.scale.set(1, (it.data.blue ? 1.4 : 1) * (0.85 + Math.random() * 0.3), 1);
+        f.position.x = (Math.random() - 0.5) * 0.004;
+      } else it.data.blue = false;
+    } else if (it.type === 'recorder') {
+      it.data.led.material.color.setHex(it.on && (G.t * 2 % 2 < 1.4) ? 0xff2020 : 0x330000);
+      if (it.on && G.t > (it.data.next || 0)) {
+        it.data.next = G.t + 6;
+        if (gh && gh.has('evp') && !gh.hunting && d < 6 && Math.random() < 0.35) {
+          const w = EVP_WORDS[Math.floor(Math.random() * EVP_WORDS.length)];
+          it.data.caught.push(w); it.data.catchT = G.t;
+          if (it === held) { sfx.evp(); toast('🎙 Диктофон записал голос: «' + w + '»', 3); }
+        }
+      }
+    } else if (it.type === 'laser') {
+      it.data.lens.material.color.setHex(it.placed ? 0x40ff60 : 0x0a200a);
+      if (it.data.grid) it.data.grid.material.opacity = G.flicker > 0.2 && Math.random() < 0.4 ? 0 : 0.8;
+    }
+  }
 }
 
 // дым

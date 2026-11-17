@@ -40,6 +40,9 @@ export const EVIDENCE = {
   uv:   { name: 'Отпечатки (УФ)',       short: 'УФ' },
   book: { name: 'Записи в блокноте',     short: 'Записи' },
   orbs: { name: 'Призрачные огни',       short: 'Огни' },
+  dots: { name: 'Лазерная сетка',        short: 'Лазер' },
+  flame: { name: 'Синее пламя',          short: 'Пламя' },
+  evp:  { name: 'Голос на диктофоне',    short: 'Диктофон' },
 };
 
 export const rand = (a, b) => a + Math.random() * (b - a);

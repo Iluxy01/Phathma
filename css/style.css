@@ -13,6 +13,8 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; overscroll-behavior: none; }
+#app { position: fixed; inset: 0; overflow: hidden; }
+body.rot #app { inset: auto; top: 0; left: 0; transform-origin: top left; transform: rotate(90deg) translateY(-100%); }
 canvas#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .hidden { display: none !important; }
 
@@ -40,7 +42,7 @@ canvas#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block;
 .slot small { font-size: 9px; color: var(--muted); margin-top: 2px; text-align: center; line-height: 1.1; padding: 0 2px; }
 .slot.sel { border-color: var(--accent); background: rgba(127, 209, 168, 0.15); }
 .slot.on::after { content: ''; position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: #3f6; box-shadow: 0 0 6px #3f6; }
-#joyHint { position: absolute; left: calc(40px + env(safe-area-inset-left)); bottom: 40px; width: 110px; height: 110px; border-radius: 50%; border: 2px dashed rgba(255,255,255,0.12); pointer-events: none !important; }
+#joyHint { position: absolute; pointer-events: none; left: calc(40px + env(safe-area-inset-left)); bottom: 40px; width: 110px; height: 110px; border-radius: 50%; border: 2px dashed rgba(255,255,255,0.12); pointer-events: none !important; }
 #joy { position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.2); display: none; pointer-events: none !important; }
 #joyKnob { position: absolute; left: 50%; top: 50%; width: 50px; height: 50px; margin: -25px 0 0 -25px; border-radius: 50%; background: rgba(255,255,255,0.35); }
 .gb { position: absolute; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); background: var(--btn); color: #fff; font-size: 22px; display: flex; flex-direction: column; align-items: center; justify-content: center; backdrop-filter: blur(3px); padding: 0; }
@@ -56,18 +58,33 @@ canvas#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block;
 .gb.sm { width: 58px; height: 58px; font-size: 20px; }
 .gb.pill { border-radius: 24px; width: auto; height: 44px; padding: 0 16px; font-size: 15px; right: calc(196px + env(safe-area-inset-right)); bottom: 108px; flex-direction: row; }
 
-@media (orientation: portrait) {
-  .slot { width: 60px; height: 60px; font-size: 22px; }
-  #slots { bottom: calc(170px + env(safe-area-inset-bottom)); }
-  #readout { bottom: calc(240px + env(safe-area-inset-bottom)); }
-  #stamina { bottom: calc(236px + env(safe-area-inset-bottom)); }
-  #joyHint { bottom: 60px; left: 30px; }
-  .gb.big { bottom: 90px; }
-  #bUse { bottom: 18px; right: 106px; }
-  #bLight { bottom: 100px; right: 112px; }
-  #bSprint { right: 188px; bottom: 18px; }
-  .gb.pill { right: 20px; bottom: 190px; }
-}
+body:not(.land) .slot { width: 60px; height: 60px; font-size: 22px; }
+body:not(.land) #slots { bottom: calc(170px + env(safe-area-inset-bottom)); }
+body:not(.land) #readout { bottom: calc(240px + env(safe-area-inset-bottom)); }
+body:not(.land) #stamina { bottom: calc(236px + env(safe-area-inset-bottom)); }
+body:not(.land) #joyHint { bottom: 60px; left: 30px; }
+body:not(.land) .gb.big { bottom: 90px; }
+body:not(.land) #bUse { bottom: 18px; right: 106px; }
+body:not(.land) #bLight { bottom: 100px; right: 112px; }
+body:not(.land) #bSprint { right: 188px; bottom: 18px; }
+body:not(.land) .gb.pill { right: 20px; bottom: 190px; }
+
+/* редактор раскладки */
+#layoutBar { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 20; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center;
+  max-width: min(560px, 70%); padding: 10px 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
+#layoutBar b { width: 100%; text-align: center; color: var(--accent); }
+#layoutBar label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+#layoutBar input { width: 90px; }
+#layoutBar button { background: #1a2232; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+#layoutBar button.ok { background: #2c6a50; border-color: #3f8a6a; }
+body.editing #touch { background: repeating-linear-gradient(45deg, rgba(127,209,168,0.05) 0 12px, transparent 12px 24px); }
+body.editing #bAsk.hidden { display: flex !important; }
+body.editing #hud > *:not(#touch):not(#layoutBar):not(#toast):not(#cross):not(#prompt):not(#stamina):not(#joy) { outline: 2px dashed rgba(127,209,168,0.7); outline-offset: 3px; cursor: move; }
+body.editing #joyHint, body.editing #readout { pointer-events: auto !important; }
+body.editing #joyHint { border-color: rgba(127,209,168,0.6); background: rgba(127,209,168,0.08); }
+body.editing #joyHint::after { content: 'Джойстик'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--accent); }
+body.editing #readout:empty { display: flex; }
+.dragging { outline-color: #fff !important; }
 
 /* ---------- эффекты ---------- */
 #nv { position: fixed; inset: 0; z-index: 5; pointer-events: none; display: none;
@@ -110,9 +127,9 @@ select { background: #1a2232; color: var(--text); border: 1px solid var(--line);
 .tab.close { margin-left: auto; }
 .tabpage { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
 #tab-ev { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.3fr) minmax(200px, 1.6fr); gap: 10px; }
-@media (max-width: 700px) and (orientation: portrait) { #tab-ev { grid-template-columns: 1fr; } }
+body:not(.land) #tab-ev { grid-template-columns: 1fr; }
 #evList, #ghostList, #ghostInfo { overflow: auto; -webkit-overflow-scrolling: touch; }
-.ev { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; margin-bottom: 6px; padding: 10px; border-radius: 10px; background: #151c2a; border: 1px solid var(--line); color: var(--text); font-size: 14px; }
+.ev { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; margin-bottom: 5px; padding: 7px 9px; border-radius: 10px; background: #151c2a; border: 1px solid var(--line); color: var(--text); font-size: 14px; }
 .ev .mark { width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--muted); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; flex-shrink: 0; }
 .ev.yes .mark { border-color: var(--accent); color: var(--accent); }
 .ev.no { opacity: 0.6; }

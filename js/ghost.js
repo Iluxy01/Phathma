@@ -24,7 +24,7 @@ export const GHOSTS = [
     mods: { throwMul: 3, multiThrow: true, activity: 1.3 },
   },
   {
-    id: 'bes', name: 'Бес', ev: ['uv', 'book', 'temp'], hunt: 70,
+    id: 'bes', name: 'Бес', ev: ['uv', 'book', 'flame'], hunt: 70,
     desc: 'Самый агрессивный дух из известных.',
     strength: 'Начинает охоту уже при 70% рассудка и повторяет её чаще.',
     weakness: 'Распятие действует на него в радиусе 5 м, а не 3 м.',
@@ -38,32 +38,60 @@ export const GHOSTS = [
     mods: { lightsOff: true, breaker: 3, darkSpeed: true },
   },
   {
-    id: 'kikimora', name: 'Кикимора', ev: ['box', 'orbs', 'uv'], hunt: 50,
+    id: 'kikimora', name: 'Кикимора', ev: ['box', 'orbs', 'dots'], hunt: 50,
     desc: 'Пакостница, которая любит хлопать дверьми.',
     strength: 'Очень быстра, пока находится далеко от жертвы.',
     weakness: 'Вблизи сильно замедляется — от неё можно оторваться.',
     mods: { farFast: true, doorMul: 3 },
   },
   {
-    id: 'navka', name: 'Навка', ev: ['emf', 'box', 'orbs'], hunt: 50,
+    id: 'navka', name: 'Навка', ev: ['emf', 'box', 'evp'], hunt: 50,
     desc: 'Водяной дух утопленницы.',
     strength: 'Часто показывается и поёт. Во время охоты дольше остаётся невидимой.',
     weakness: 'Тянется к воде — постоянно бродит в ванной.',
     mods: { eventMul: 2.2, water: true, blinkOff: true },
   },
   {
-    id: 'upyr', name: 'Упырь', ev: ['emf', 'uv', 'orbs'], hunt: 50,
+    id: 'upyr', name: 'Упырь', ev: ['uv', 'orbs', 'dots'], hunt: 50,
     desc: 'Хищник, питающийся страхом.',
     strength: 'Увидев жертву, стремительно разгоняется. Рядом с ним рассудок тает быстрее.',
     weakness: 'Без прямой видимости двигается очень медленно.',
     mods: { losSpeed: true, drainNear: true },
   },
   {
-    id: 'domovoy', name: 'Домовой', ev: ['box', 'temp', 'orbs'], hunt: 50,
+    id: 'domovoy', name: 'Домовой', ev: ['temp', 'flame', 'evp'], hunt: 50,
     desc: 'Старый хозяин дома, не терпящий чужаков.',
     strength: 'Злится, когда в его комнату приносят вещи: каждый предмет повышает порог охоты на 5%. В его комнате рассудок падает вдвое быстрее.',
     weakness: 'Почти не покидает свою комнату и любит включать свет.',
     mods: { homebody: true, lightsOn: true, itemsAnger: true, activity: 0.9 },
+  },
+  {
+    id: 'leshiy', name: 'Леший', ev: ['emf', 'dots', 'flame'], hunt: 50,
+    desc: 'Лесной дух, заблудившийся в чужом доме.',
+    strength: 'Во время охоты чует электронику за 12 м, а не за 7.',
+    weakness: 'Бродит по всему дому и редко трогает вещи — его комнату трудно найти, но и сам он почти не шумит.',
+    mods: { wander: true, elecRange: 12, activity: 0.75 },
+  },
+  {
+    id: 'poludnitsa', name: 'Полуденница', ev: ['book', 'dots', 'evp'], hunt: 50,
+    desc: 'Дух палящего полдня, ненавидящий тень.',
+    strength: 'Включает свет и охотится раньше (при 60%), если вы стоите на свету.',
+    weakness: 'В темноте теряет силу: охотится только при 35%. Благовония отпугивают её на 150 с.',
+    mods: { lightHunt: true, lightsOn: true, smudge: 150 },
+  },
+  {
+    id: 'mara', name: 'Мара', ev: ['temp', 'uv', 'evp'], hunt: 50,
+    desc: 'Ночной кошмар, наваливающийся на спящих.',
+    strength: 'Если стоять рядом с ней неподвижно, рассудок тает очень быстро.',
+    weakness: 'Её охоты короткие — около 20 секунд.',
+    mods: { stillDrain: true, shortHunt: true },
+  },
+  {
+    id: 'anchutka', name: 'Анчутка', ev: ['box', 'orbs', 'flame'], hunt: 50,
+    desc: 'Мелкий бес-проказник.',
+    strength: 'Один раз за охоту может мгновенно переместиться ближе к жертве, если потерял её из виду.',
+    weakness: 'Во время охоты двигается медленнее остальных.',
+    mods: { teleport: true, slow: true, activity: 1.2 },
   },
 ];
 
@@ -122,6 +150,24 @@ export class Ghost {
     this.stepAcc = 0; this.footprints = 0; this.losTime = 0; this.repathT = 0;
     this.anger = 0;
     this.orbs = [];
+    this.dotsCheck = 0; this.dotsUntil = 0; this.dots = null;
+    if (def.ev.includes('dots')) {
+      // облако точек в форме фигуры
+      const pts = [];
+      for (let i = 0; i < 260; i++) {
+        const y = Math.random() * 1.75;
+        let r = y > 1.5 ? 0.13 : y > 1.35 ? 0.06 : y > 0.85 ? 0.22 : 0.18 + (0.85 - y) * 0.15;
+        const a = Math.random() * Math.PI * 2;
+        let x = Math.cos(a) * r, z = Math.sin(a) * r * 0.7;
+        if (y > 0.75 && y < 1.4 && Math.random() < 0.3) { x = (Math.random() < 0.5 ? -1 : 1) * 0.28; z = 0; }
+        pts.push(x, y, z);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      this.dots = new THREE.Points(g, new THREE.PointsMaterial({ color: 0x60ff80, size: 3.5, sizeAttenuation: false, fog: false }));
+      this.dots.visible = false;
+      scene.add(this.dots);
+    }
     if (def.ev.includes('orbs')) {
       const om = new THREE.MeshBasicMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0.9, fog: false });
       for (let i = 0; i < 3; i++) {
@@ -144,6 +190,7 @@ export class Ghost {
   huntThreshold() {
     let th = this.def.hunt;
     if (this.m.lightsOff || this.m.darkSpeed) th = roomLit(G.player.room) ? 40 : 60;
+    if (this.m.lightHunt) th = roomLit(G.player.room) ? 60 : 35;
     if (this.m.itemsAnger) th = Math.min(75, th + 5 * this.anger);
     return th;
   }
@@ -163,6 +210,7 @@ export class Ghost {
       const u = o.userData;
       o.position.set(u.bx + Math.sin(t * 0.3 + u.ph) * 0.8, u.by + Math.sin(t * 0.7 + u.ph) * 0.3, u.bz + Math.cos(t * 0.25 + u.ph) * 0.8);
     }
+    this.updateDots(dt);
     if (this.hunting) { this.updateHunt(dt); return; }
     if (this.eventActive) { this.updateEvent(dt); return; }
     // блуждание
@@ -184,6 +232,21 @@ export class Ghost {
       if (G.player.inHouse && this.distTo(G.player.x, G.player.z) < 10 && Math.random() < 0.45 * (this.m.eventMul || 1)) this.startEvent();
     }
     if (t > this.tHuntCheck) { this.tHuntCheck = t + 4; this.tryHunt(); }
+  }
+
+  // силуэт в лазерной сетке
+  updateDots(dt) {
+    const d = this.dots;
+    if (!d) return;
+    const t = G.t;
+    if (!this.hunting && t > this.dotsCheck) {
+      this.dotsCheck = t + 2.5;
+      const near = G.placed.some(it => it.type === 'laser' && it.on && this.distTo(it.x, it.z) < 2.6);
+      if (near && Math.random() < 0.45) this.dotsUntil = t + rand(1, 1.8);
+    }
+    const on = t < this.dotsUntil;
+    d.visible = on && Math.random() > 0.15;
+    if (on) { d.position.set(this.x, 0, this.z); d.rotation.y = this.yaw; }
   }
 
   updateTemps(dt) {
@@ -210,6 +273,7 @@ export class Ghost {
     const here = roomAt(this.x, this.z);
     let room;
     if (this.m.homebody) room = Math.random() < 0.92 ? this.home : null;
+    else if (this.m.wander) room = Math.random() < 0.45 ? this.home : null;
     else if (this.m.water && Math.random() < 0.35) room = 'W';
     else if (here !== this.home) room = Math.random() < 0.8 ? this.home : null;
     else room = Math.random() < 0.72 ? this.home : null;
@@ -270,6 +334,9 @@ export class Ghost {
     opts.push(['sound', 1.5]);
     if (G.power) opts.push(['breaker', (this.m.breaker || 0.12)]);
     if (this.m.lightsOn && !G.power) opts.push(['breakerOn', 2]);
+    const candles = [...G.placed, ...G.inv.filter(Boolean)].filter(it => it.type === 'candle' && it.data.lit &&
+      this.distTo(it.placed ? it.x : p.x, it.placed ? it.z : p.z) < 3);
+    if (candles.length) opts.push(['candle', 1.5]);
     const books = this.has('book') ? G.placed.filter(it => it.type === 'book' && !it.data.written && this.distTo(it.x, it.z) < 3.5) : [];
     if (books.length) opts.push(['book', 6]);
     let tot = opts.reduce((a, o) => a + o[1], 0), r = Math.random() * tot, act = opts[0][0];
@@ -328,6 +395,14 @@ export class Ghost {
       case 'breakerOn':
         G.power = true; sfx.breaker(true);
         break;
+      case 'candle': {
+        const c = pick(candles);
+        c.data.lit = false;
+        const cx = c.placed ? c.x : p.x, cz = c.placed ? c.z : p.z;
+        sfx.puff(cx, cz);
+        this.emf(cx, cz, 2);
+        break;
+      }
       case 'book': {
         const it = pick(books);
         it.data.written = true; drawBook(it, true);
@@ -438,7 +513,8 @@ export class Ghost {
   startHunt() {
     this.hunting = true;
     this.graceUntil = G.t + 3.5;
-    this.huntEnd = G.t + rand(28, 40);
+    this.huntEnd = G.t + (this.m.shortHunt ? rand(18, 22) : rand(28, 40));
+    this.teleported = false; this.unseenT = 0;
     this.losTime = 0; this.lastKnown = null; this.path = null; this.blinkT = 0;
     if (frontDoor.angle > 0.1) sfx.door(frontDoor.cx, frontDoor.cz, true);
     frontDoor.target = 0; frontDoor.locked = true;
@@ -465,13 +541,26 @@ export class Ghost {
     let sees = false, detect = false, elec = false;
     if (!blind && p.inHouse && !p.dead) {
       sees = !p.hidden && d < 20 && !segBlocked(this.x, this.z, p.x, p.z);
-      elec = heldElectronicOn() && d < 7.5;
+      elec = heldElectronicOn() && d < (this.m.elecRange || 7.5);
       detect = sees || elec;
     }
     this.losTime = sees ? this.losTime + dt : Math.max(0, this.losTime - dt * 2);
     if (detect) {
       this.lastKnown = { x: p.x, z: p.z };
       this.knowsHidden = !!p.hidden && (p.seenHiding || elec);
+    }
+    // Анчутка: прыжок ближе к жертве
+    this.unseenT = sees ? 0 : (this.unseenT || 0) + dt;
+    if (this.m.teleport && !this.teleported && this.unseenT > 5 && p.inHouse && !p.dead && t > this.graceUntil) {
+      for (let i = 0; i < 20; i++) {
+        const a = rand(0, Math.PI * 2), r = rand(4, 6);
+        const x = p.x + Math.sin(a) * r, z = p.z + Math.cos(a) * r;
+        if (roomAt(x, z) === '.' || segBlocked(p.x, p.z, x, z) === false) continue;
+        this.x = x; this.z = z; this.teleported = true; this.path = null;
+        this.lastKnown = { x: p.x, z: p.z };
+        sfx.whisper(x, z);
+        break;
+      }
     }
     this.repathT -= dt;
     if (sees) this.path = [[p.x, p.z]];
@@ -489,6 +578,7 @@ export class Ghost {
     // скорость
     let speed = 1.7 * (1 + Math.min(this.losTime / 13, 1) * 0.65);
     if (this.m.farFast) speed = d > 8 ? 2.7 : d < 3 ? 1.25 : 1.25 + (d - 3) / 5 * 1.45;
+    if (this.m.slow) speed *= 0.82;
     if (this.m.losSpeed) speed = sees ? 1.4 + Math.min(this.losTime / 3, 1) * 1.6 : 1.0;
     if (this.m.darkSpeed) speed *= roomLit(roomAt(this.x, this.z)) ? 0.8 : 1.15;
     if (blind) speed = 1.0;

@@ -6,6 +6,7 @@ import { initAudio, sfx, setWindIndoor, suspendAudio, setStatic, setHuntAudio, u
 import * as I from './items.js';
 import { Ghost, GHOSTS } from './ghost.js';
 import * as UI from './ui.js';
+import { view, toLogical, deltaLogical, initScreen, setOrient, openLayoutEditor, initLayoutEditor, joyOnRight } from './screen.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,10 +16,10 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPrefer
 let quality = 1;
 function applyQuality() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2) * (quality >= 1.5 ? 1 : quality >= 1 ? 0.75 : 0.5));
-  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  renderer.setSize(view.w, view.h, false);
 }
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 90);
+const camera = new THREE.PerspectiveCamera(72, 16 / 9, 0.05, 90);
 camera.rotation.order = 'YXZ';
 scene.add(camera);
 
@@ -74,10 +75,12 @@ const touchEl = $('touch');
 touchEl.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (G.uiOpen) return;
-  const left = e.clientX < window.innerWidth * 0.42 && e.pointerType !== 'mouse';
-  if (left && touchState.joyId === null) {
-    touchState.joyId = e.pointerId; touchState.joyX = e.clientX; touchState.joyY = e.clientY;
-    joy.style.display = 'block'; joy.style.left = e.clientX + 'px'; joy.style.top = e.clientY + 'px';
+  const q = toLogical(e.clientX, e.clientY);
+  const right = joyOnRight();
+  const inJoy = e.pointerType !== 'mouse' && (right ? q.x > view.w * 0.58 : q.x < view.w * 0.42);
+  if (inJoy && touchState.joyId === null) {
+    touchState.joyId = e.pointerId; touchState.joyX = q.x; touchState.joyY = q.y;
+    joy.style.display = 'block'; joy.style.left = q.x + 'px'; joy.style.top = q.y + 'px';
     knob.style.transform = 'translate(0,0)';
   } else if (touchState.lookId === null) {
     touchState.lookId = e.pointerId; touchState.lx = e.clientX; touchState.ly = e.clientY;
@@ -87,15 +90,16 @@ touchEl.addEventListener('pointerdown', (e) => {
 touchEl.addEventListener('pointermove', (e) => {
   e.preventDefault();
   if (e.pointerId === touchState.joyId) {
-    let dx = e.clientX - touchState.joyX, dy = e.clientY - touchState.joyY;
+    const q = toLogical(e.clientX, e.clientY);
+    let dx = q.x - touchState.joyX, dy = q.y - touchState.joyY;
     const d = Math.hypot(dx, dy), max = 50;
     if (d > max) { dx = dx / d * max; dy = dy / d * max; }
     knob.style.transform = `translate(${dx}px,${dy}px)`;
     input.mx = dx / max; input.mz = -dy / max;
   } else if (e.pointerId === touchState.lookId) {
-    const dx = e.clientX - touchState.lx, dy = e.clientY - touchState.ly;
+    const dl = deltaLogical(e.clientX - touchState.lx, e.clientY - touchState.ly);
     touchState.lx = e.clientX; touchState.ly = e.clientY;
-    look(dx, dy);
+    look(dl.x, dl.y);
   }
 });
 const endPtr = (e) => {
@@ -124,6 +128,7 @@ function bindBtn(id, fn, holdFn) {
   b.addEventListener('pointerdown', (e) => {
     e.preventDefault(); e.stopPropagation();
     b.classList.add('pressed');
+    if (G.uiOpen === 'layout') return;
     if (holdFn) holdFn(true); else if (!G.uiOpen) fn();
   });
   const up = (e) => { b.classList.remove('pressed'); if (holdFn) holdFn(false); };
@@ -326,6 +331,10 @@ function updateSanity(dt) {
   const p = G.player, gh = G.ghost;
   if (!p.inHouse || p.dead) return;
   let drain = W.roomLit(p.room) ? 0 : 0.13;
+  // зажжённая свеча рядом успокаивает
+  if (drain && [...G.inv, ...G.placed].some(it => it && it.type === 'candle' && it.data.lit &&
+      (!it.placed || Math.hypot(it.x - p.x, it.z - p.z) < 2.5))) drain *= 0.5;
+  if (gh.m.stillDrain && !p.moving && gh.distTo(p.x, p.z) < 6) drain += 0.25;
   if (gh.m.drainNear && gh.distTo(p.x, p.z) < 5) drain += 0.15;
   if (gh.m.homebody && p.room === gh.home) drain *= 2;
   G.sanity = Math.max(0, G.sanity - drain * dt);
@@ -423,12 +432,27 @@ $('btnStart').addEventListener('click', () => {
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+initScreen(() => {
+  camera.aspect = view.w / view.h;
   camera.updateProjectionMatrix();
   applyQuality();
 });
-applyQuality();
+initLayoutEditor();
+document.querySelectorAll('.orientSel').forEach(sel => {
+  sel.value = G.settings.orient;
+  sel.addEventListener('change', () => {
+    setOrient(sel.value);
+    document.querySelectorAll('.orientSel').forEach(o => { o.value = sel.value; });
+  });
+});
+$('btnLayout').addEventListener('click', () => {
+  UI.hide('menu');
+  openLayoutEditor(() => { UI.hide('hud'); UI.show('menu'); });
+});
+$('btnLayout2').addEventListener('click', () => {
+  UI.closeScreen('pause');
+  openLayoutEditor(() => UI.openScreen('pause'));
+});
 
 // ---------- цикл ----------
 let last = performance.now(), hudT = 0, boardT = 0, heartT = 0;

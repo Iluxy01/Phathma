@@ -463,6 +463,23 @@ export const sfx = {
     const notes = [392, 349, 311, 294, 311, 262];
     notes.forEach((f, i) => voice(d, t + i * 0.55, { f0: f, f0End: f * 0.98, dur: 0.6, vowels: ['u', 'o'], vol: 0.35, vib: 5.5, rasp: 0.15 }));
   },
+  puff(x, z) {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(x, z, 0.5, 0.6);
+    nz(d, t, { buf: PINK, type: 'lowpass', f: 900, fEnd: 300, dur: 0.35, a: 0.03, vol: 0.5 });
+  },
+  // голос на записи диктофона: «обратная» речь с хрипом
+  evp() {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(undefined, undefined, 0, 1.2);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.9;
+    const sh = shaper(6); sh.connect(bp); bp.connect(d);
+    const g = ctx.createGain(); g.gain.value = 0.55; g.connect(sh);
+    const vs = Object.keys(VOWELS);
+    const f0 = rnd(90, 130);
+    voice(g, t + 0.1, { f0: f0 * 0.8, f0End: f0 * 1.25, dur: rnd(0.7, 1.1), vowels: [vs[Math.floor(rnd(0, 5))], vs[Math.floor(rnd(0, 5))], vs[Math.floor(rnd(0, 5))]], vol: 0.8, vib: 3, rasp: 0.9 });
+    nz(d, t, { buf: PINK, f: 2000, q: 0.6, dur: 1.4, a: 0.3, vol: 0.12 });
+  },
   cricket(x, z) {
     if (!ctx) return;
     const t = ctx.currentTime, d = route(x, z, 0.1, 0.5, false);
