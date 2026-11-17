@@ -5,8 +5,8 @@ import { ITEM_DEFS, takeFromStock, returnToStock, useLabel, selected } from './i
 
 const $ = (id) => document.getElementById(id);
 
-export function show(id) { $(id).classList.remove('hidden'); }
-export function hide(id) { $(id).classList.add('hidden'); }
+export function show(id) { const e = $(id); if (e) e.classList.remove('hidden'); }
+export function hide(id) { const e = $(id); if (e) e.classList.add('hidden'); }
 
 export function openScreen(id) {
   G.uiOpen = id;

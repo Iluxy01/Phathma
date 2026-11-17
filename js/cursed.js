@@ -208,7 +208,7 @@ const QUESTIONS = [
   { q: 'Прощай', cost: 0, a: () => 'ПРОЩАЙ', bye: true },
 ];
 function openBoard() {
-  G.uiOpen = 'cursed';
+  G.uiOpen = 'cursedUI';
   $('cursedUI').classList.remove('hidden');
   $('cursedTitle').textContent = 'Говорящая доска';
   $('cursedText').textContent = 'Каждый вопрос отнимает рассудок. Не забудьте попрощаться.';
@@ -224,7 +224,7 @@ function openBoard() {
 }
 function closeCursedUI() {
   $('cursedUI').classList.add('hidden');
-  if (G.uiOpen === 'cursed') G.uiOpen = null;
+  if (G.uiOpen === 'cursedUI') G.uiOpen = null;
 }
 function askBoard(q) {
   if (C.broken || C.busy) return;

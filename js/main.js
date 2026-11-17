@@ -15,9 +15,16 @@ const $ = (id) => document.getElementById(id);
 // ---------- рендер ----------
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-let quality = 1;
+function loadSetting(k, d) { try { const v = localStorage.getItem('phathma.' + k); return v === null ? d : JSON.parse(v); } catch (_) { return d; } }
+function saveSetting(k, v) { try { localStorage.setItem('phathma.' + k, JSON.stringify(v)); } catch (_) { /* */ } }
+let quality = loadSetting('quality', 'auto');   // 'auto' | 0.75 | 1 | 1.5
+G.settings.sens = loadSetting('sens', 1);
+G.settings.showFps = loadSetting('fps', false);
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+let autoScale = 0.75;                               // для режима «Авто»
 function applyQuality() {
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2) * (quality >= 1.5 ? 1 : quality >= 1 ? 0.75 : 0.5));
+  const k = quality === 'auto' ? autoScale : (quality >= 1.5 ? 1 : quality >= 1 ? 0.75 : 0.5);
+  renderer.setPixelRatio(Math.max(0.5, DPR * k));
   renderer.setSize(view.w, view.h, false);
 }
 const scene = new THREE.Scene();
@@ -155,7 +162,13 @@ document.querySelectorAll('.slot').forEach(el => el.addEventListener('pointerdow
 window.addEventListener('keydown', (e) => {
   input.keys[e.code] = true;
   if (!G.running || G.player.dead) return;
-  if (e.code === 'Escape') { G.uiOpen ? UI.closeScreen(G.uiOpen) : pause(); return; }
+  if (e.code === 'Escape') {
+    if (G.uiOpen === 'pause') resume();
+    else if (G.uiOpen === 'layout') { /* редактор закрывается кнопкой «Готово» */ }
+    else if (G.uiOpen) UI.closeScreen(G.uiOpen);
+    else pause();
+    return;
+  }
   if (G.uiOpen) { if (e.code === 'KeyJ' && G.uiOpen === 'journal') UI.closeScreen('journal'); return; }
   switch (e.code) {
     case 'KeyE': interact(); break;
@@ -292,8 +305,9 @@ function updatePlayer(dt) {
   const wantSprint = sprintToggle || k.ShiftLeft || k.ShiftRight;
   p.moving = len > 0.15 && !p.hidden && !G.uiOpen && !CU.mirrorActive();
   let speed = 1.6;
+  p.running = false;
   if (p.moving && wantSprint && p.stamina > 0 && !p.exhausted) {
-    speed = 2.9; p.stamina -= dt;
+    speed = 2.9; p.stamina -= dt; p.running = true;
     if (p.stamina <= 0) { p.exhausted = true; p.stamina = 0; }
   } else {
     p.stamina = Math.min(3, p.stamina + dt * (p.moving ? 0.4 : 0.8));
@@ -321,14 +335,15 @@ function updatePlayer(dt) {
   if (ind !== lastIndoor) { lastIndoor = ind; setWindIndoor(ind); }
 }
 
+const _dv = new THREE.Vector3(), _dm = new THREE.Matrix4(), _dq = new THREE.Quaternion();
 function updateCamera(dt) {
   const p = G.player;
   if (p.dead) {
     const gh = G.ghost;
-    const target = new THREE.Vector3(gh.x, 1.55, gh.z);
-    const m = new THREE.Matrix4().lookAt(camera.position, target, camera.up);
-    const q = new THREE.Quaternion().setFromRotationMatrix(m);
-    camera.quaternion.slerp(q, Math.min(1, dt * 6));
+    _dv.set(gh.x, 1.55, gh.z);
+    _dm.lookAt(camera.position, _dv, camera.up);
+    _dq.setFromRotationMatrix(_dm);
+    camera.quaternion.slerp(_dq, Math.min(1, dt * 6));
     camera.position.y = Math.max(0.6, camera.position.y - dt * 0.3);
     return;
   }
@@ -336,8 +351,11 @@ function updateCamera(dt) {
     const s = p.hidden;
     camera.position.set(s.x + (s.out.x - s.x) * 0.25, 1.5, s.z + (s.out.z - s.z) * 0.25);
   } else {
-    camera.position.set(p.x, 1.6 + Math.sin(p.bob) * 0.035, p.z);
+    const sway = p.inHouse && G.sanity < 30 ? (30 - G.sanity) / 30 * 0.012 : 0;
+    camera.position.set(p.x + Math.sin(G.t * 0.7) * sway, 1.6 + Math.sin(p.bob) * (p.running ? 0.05 : 0.035), p.z);
   }
+  const fov = p.running ? 77 : 72;
+  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * Math.min(1, dt * 6); camera.updateProjectionMatrix(); }
   camera.rotation.set(p.pitch, p.yaw, 0, 'YXZ');
 }
 
@@ -404,10 +422,44 @@ function takePhotoNow() {
   toast('📷 ' + res.label + (res.stars ? ' ' + '★'.repeat(res.stars) : ''));
 }
 
+// ---------- подсказки (на «Любителе» и «Опытном») ----------
+const hintsShown = {};
+G.hint = (key, text, force = false) => {
+  if (hintsShown[key]) return;
+  if (!force && !(G.diffKey === 'amateur' || G.diffKey === 'inter')) return;
+  hintsShown[key] = true;
+  toast(text, 5);
+};
+let tickT = 0, caseT = 0;
+function updateHints(dt) {
+  const p = G.player;
+  if (p.inHouse) G.hint('house', 'Ищите комнату призрака: там холоднее, а приборы реагируют. Свет замедляет потерю рассудка.');
+  if (G.sanity < 55 && p.inHouse) G.hint('sanity', 'Рассудок падает — скоро призрак сможет охотиться. Примите успокоительное в фургоне или включите свет.');
+  if (Object.values(G.journal.evidence).filter(v => v === 1).length >= G.diff.evidence) G.hint('evdone', 'Улик достаточно! Выберите призрака в журнале и уезжайте на фургоне.');
+  // тиканье часов в коридоре
+  tickT -= dt;
+  const ck = W.clockPos();
+  if (ck && tickT <= 0) { tickT = 1; if (Math.hypot(p.x - ck.x, p.z - ck.z) < 7) sfx.tick(ck.x, ck.z); }
+  // доска с делом в фургоне
+  caseT -= dt;
+  if (caseT <= 0 && p.inVan) { caseT = 2; drawCase(); }
+}
+function drawCase() {
+  const gh = G.ghost;
+  const rows = [
+    { text: `Призрак: ${gh.fullName}, ${gh.age} лет` },
+    { text: `Сложность: ${G.diff.name} · улик: ${G.diff.evidence} из 3` },
+    { text: (G.journal.guess ? '✓' : '○') + ' Определить тип призрака', done: !!G.journal.guess },
+    ...G.objectives.map(o => ({ text: (G.done[o.id] ? '✓ ' : '○ ') + o.text, done: G.done[o.id] })),
+    { text: `Фото: ${G.photos.length} · охот пережито: ${G.stats.hunts}` },
+  ];
+  W.drawCaseBoard({ title: 'ДЕЛО №' + (1000 + G.profile.games), rows });
+}
+
 // ---------- атмосфера ----------
 const dust = (() => {
   const n = 160, pos = new Float32Array(n * 3);
-  for (let i = 0; i < n * 3; i++) pos[i] = (Math.random() - 0.5) * 6;
+  for (let i = 0; i < n; i++) { pos[i * 3] = 8.5 + (Math.random() - 0.5) * 6; pos[i * 3 + 1] = Math.random() * 2.5; pos[i * 3 + 2] = 18 + (Math.random() - 0.5) * 6; }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   const pts = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xbfae90, size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0.5, depthWrite: false }));
@@ -432,13 +484,13 @@ function updateAtmosphere(dt) {
   dust.visible = p.inHouse && p.flashlight;
   if (dust.visible) {
     const a = dust.geometry.attributes.position;
+    const wrap = (v, c) => { const d = v - c; return d > 3 ? v - 6 : d < -3 ? v + 6 : v; };
     for (let i = 0; i < a.count; i++) {
       let x = a.getX(i) + Math.sin(G.t * 0.3 + i) * 0.002, y = a.getY(i) - 0.0015, z = a.getZ(i);
-      if (y < -1.5) y = 1;
-      a.setXYZ(i, x, y, z);
+      if (y < 0.1) y = 2.5;
+      a.setXYZ(i, wrap(x, p.x), y, wrap(z, p.z));
     }
     a.needsUpdate = true;
-    dust.position.set(Math.round(p.x * 2) / 2, 1.4, Math.round(p.z * 2) / 2);
   }
   // пар изо рта в холодной комнате
   const temp = p.inHouse ? G.temps[p.room] : 8;
@@ -491,8 +543,13 @@ function resume() {
 UI.initUI({ pause, resume, leave });
 
 // ---------- старт ----------
-$('sens').addEventListener('input', (e) => { G.settings.sens = +e.target.value; });
-$('quality').addEventListener('change', (e) => { quality = +e.target.value; applyQuality(); });
+$('sens').value = G.settings.sens;
+$('sens').addEventListener('input', (e) => { G.settings.sens = +e.target.value; saveSetting('sens', G.settings.sens); });
+$('quality').value = String(quality);
+$('quality').addEventListener('change', (e) => { quality = e.target.value === 'auto' ? 'auto' : +e.target.value; saveSetting('quality', quality); autoScale = 0.75; applyQuality(); });
+$('showFps').checked = G.settings.showFps;
+$('showFps').addEventListener('change', (e) => { G.settings.showFps = e.target.checked; saveSetting('fps', G.settings.showFps); $('fps').classList.toggle('hidden', !G.settings.showFps); });
+$('fps').classList.toggle('hidden', !G.settings.showFps);
 // ---------- профиль и сложность ----------
 function loadProfile() { try { return JSON.parse(localStorage.getItem('phathma.profile')) || { money: 0, xp: 0, games: 0 }; } catch (_) { return { money: 0, xp: 0, games: 0 }; } }
 G.profile = loadProfile();
@@ -533,11 +590,14 @@ $('btnStart').addEventListener('click', () => {
     if (el.requestFullscreen && matchMedia('(pointer: coarse)').matches) el.requestFullscreen().then(() => screen.orientation?.lock?.('landscape').catch(() => {})).catch(() => {});
   } catch (_) { /* */ }
   toast('Возьмите снаряжение со стеллажа слева. «Положить» в фургоне — вернуть на место', 5);
+  if (!G.power) setTimeout(() => toast('В доме выбит щиток — он в кладовке рядом с гостиной', 5), 5500);
+  drawCase();
   last = performance.now();
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 
 initScreen(() => {
+  G.needRender = true;
   camera.aspect = view.w / view.h;
   camera.updateProjectionMatrix();
   applyQuality();
@@ -561,10 +621,28 @@ $('btnLayout2').addEventListener('click', () => {
 
 // ---------- цикл ----------
 let last = performance.now(), hudT = 0, boardT = 0, heartT = 0;
+let fpsN = 0, fpsT = 0, rendered = false;
 function frame(now) {
   requestAnimationFrame(frame);
   let dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  // счётчик FPS и автоматическое разрешение
+  fpsN++; fpsT += dt;
+  if (fpsT >= 2) {
+    const fps = fpsN / fpsT; fpsN = 0; fpsT = 0;
+    if (G.settings.showFps) $('fps').textContent = Math.round(fps) + ' FPS · ' + renderer.info.render.calls + ' dc';
+    if (quality === 'auto' && G.running && !G.paused) {
+      if (fps < 38 && autoScale > 0.45) { autoScale = Math.max(0.45, autoScale - 0.1); applyQuality(); }
+      else if (fps > 56 && autoScale < 1) { autoScale = Math.min(1, autoScale + 0.05); applyQuality(); }
+    }
+  }
+  // в меню и на паузе картинка не меняется — не тратим батарею
+  if ((!G.running || G.paused) && deathT < 0 && rendered && !G.needRender) return;
+  rendered = true; G.needRender = false;
+  stepGame(dt);
+  renderFrame(dt);
+}
+function stepGame(dt) {
   if (G.running && !G.paused) {
     G.t += dt;
     updatePlayer(dt);
@@ -583,6 +661,7 @@ function frame(now) {
     CU.updateCursed(dt);
     AP.updateAppliances(dt);
     updateAtmosphere(dt);
+    updateHints(dt);
     updateEffects(dt);
     // сердцебиение при охоте рядом
     const gh = G.ghost;
@@ -600,6 +679,8 @@ function frame(now) {
     // старые события
     G.emfSources = G.emfSources.filter(s => s.until > G.t);
   }
+}
+function renderFrame(dt) {
   updateCamera(dt);
   updateAudio(dt);
   renderMonitor();
@@ -613,10 +694,13 @@ function frame(now) {
     W.ambient.intensity = ai; W.ambient.color.setHex(ac); flash.intensity = fl;
   } else renderer.render(scene, camera);
 }
+const mergeInfo = W.mergeStatic(scene);
 W.drawSanityBoard();
 updateCamera(0);
 $('loading').classList.add('hidden');
 requestAnimationFrame(frame);
 
-// для отладки в консоли
+// для отладки в консоли и автотестов
 window.__G = G;
+window.__mergeInfo = mergeInfo;
+window.__step = (n, dt = 0.05) => { for (let i = 0; i < n; i++) stepGame(dt); updateCamera(dt); };

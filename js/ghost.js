@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { G, rand, randi, pick, clamp, completeObjective } from './state.js';
 import {
   hideSpots, HOUSE_ROOMS, ROOMS, roomAt, findPath, randomCellIn, doors, switches, props,
-  setLight, roomLit, segBlocked, frontDoor, fuseBox, mat,
+  setLight, roomLit, segBlocked, frontDoor, fuseBox, mat, doorBetween,
 } from './world.js';
 import { sfx, setHuntAudio, setHuntIntensity } from './audio.js';
 import { nearAppliances, toggleAppliance } from './appliances.js';
@@ -179,6 +179,7 @@ export class Ghost {
     this.mist.visible = false;
     scene.add(this.mist);
     this.mesh.visible = false;
+    this.mesh.userData.noMerge = true;
     scene.add(this.mesh);
     this.path = null; this.pauseUntil = 0; this.yaw = 0;
     this.hunting = false; this.eventActive = false;
@@ -292,7 +293,7 @@ export class Ghost {
     }
     if (t > this.tEvent) {
       this.tEvent = t + rand(8, 16);
-      if (G.player.inHouse && this.distTo(G.player.x, G.player.z) < 10 && Math.random() < 0.45 * (this.m.eventMul || 1)) this.startEvent();
+      if (G.player.inHouse && !G.player.hidden && this.distTo(G.player.x, G.player.z) < 10 && Math.random() < 0.45 * (this.m.eventMul || 1)) this.startEvent();
     }
     if (t > this.tHuntCheck) { this.tHuntCheck = t + 4; this.tryHunt(); }
   }
@@ -339,7 +340,10 @@ export class Ghost {
     else if (this.m.wander) room = Math.random() < 0.45 ? this.home : null;
     else if (this.m.water && Math.random() < 0.35) room = 'W';
     else if (here !== this.home) room = Math.random() < 0.8 ? this.home : null;
-    else room = Math.random() < 0.72 ? this.home : null;
+    else room = Math.random() < 0.72 - (100 - G.sanity) / 300 ? this.home : null;
+    // при низком рассудке призрак всё чаще приходит туда, где игрок
+    const pr = G.player.room;
+    if (!this.m.homebody && G.player.inHouse && pr !== '.' && Math.random() < (G.sanity < 40 ? 0.3 : 0.06)) room = pr;
     const [tx, tz] = randomCellIn(room);
     this.path = findPath(this.x, this.z, tx, tz);
     if (!this.path) this.pauseUntil = G.t + 2;
@@ -348,6 +352,21 @@ export class Ghost {
   moveAlong(dt, speed, stepVol) {
     if (!this.path || !this.path.length) return;
     const [tx, tz] = this.path[0];
+    // закрытая дверь впереди — призрак её распахивает
+    const cx = Math.floor(this.x), cz = Math.floor(this.z), nx = Math.floor(tx), nz = Math.floor(tz);
+    if ((cx !== nx || cz !== nz) && Math.abs(cx - nx) + Math.abs(cz - nz) === 1) {
+      const d = doorBetween(cx, cz, nx, nz);
+      if (d && !d.isFront && d.angle < 0.5 && d.target < 0.5 && Math.hypot(d.cx - this.x, d.cz - this.z) < 0.9) {
+        d.target = this.hunting ? 1.45 : rand(0.7, 1.2);
+        d.speed = this.hunting ? 7 : 2;
+        setTimeout(() => { d.speed = 3; }, 800);
+        sfx.door(d.cx, d.cz, this.hunting);
+        if (!this.hunting) {
+          this.emf(d.cx, d.cz, 2);
+          if (this.has('uv')) addPrint(d.pivot, rand(0.62, 0.82), rand(0.95, 1.35), 0.031, 0);
+        }
+      }
+    }
     const dx = tx - this.x, dz = tz - this.z, d = Math.hypot(dx, dz);
     const s = speed * dt;
     if (d <= s) { this.x = tx; this.z = tz; this.path.shift(); }
@@ -626,6 +645,8 @@ export class Ghost {
     this.mesh.visible = true;
     setHuntAudio(true);
     G.stats.hunts++;
+    try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (_) { /* */ }
+    if (G.hint) G.hint('hunt', 'ОХОТА! Спрячьтесь в шкаф или за закрытой дверью. Выключите фонарь и электронику, не бегайте рядом с призраком.');
   }
 
   endHunt() {
@@ -648,6 +669,7 @@ export class Ghost {
       sees = !p.hidden && d < 20 && !segBlocked(this.x, this.z, p.x, p.z);
       if (this.m.seeThrough && d < 4.5) { detect = true; this.lastKnown = { x: p.x, z: p.z }; }
       elec = heldElectronicOn() && d < (this.m.elecRange || 7.5);
+      if (p.running && d < 9) { detect = true; this.lastKnown = { x: p.x, z: p.z }; }
       detect = detect || sees || elec;
     }
     this.losTime = sees ? this.losTime + dt : Math.max(0, this.losTime - dt * 2);
@@ -731,6 +753,7 @@ export class Ghost {
     this.hunting = false;
     setHuntAudio(false);
     sfx.scream();
+    try { navigator.vibrate && navigator.vibrate(700); } catch (_) { /* */ }
     if (G.onDeath) G.onDeath();
   }
 }

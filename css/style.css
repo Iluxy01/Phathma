@@ -190,3 +190,5 @@ body:not(.land) .diffs { grid-template-columns: repeat(3, 1fr); }
 #grain { position: fixed; top: -50%; left: -50%; width: 200%; height: 200%; z-index: 3; pointer-events: none; opacity: 0.06; animation: grain 0.5s steps(4) infinite; }
 @keyframes grain { 0% { transform: translate(0,0); } 25% { transform: translate(-6%,4%); } 50% { transform: translate(5%,-3%); } 75% { transform: translate(-3%,-6%); } }
 @media (prefers-reduced-motion: reduce) { #grain { animation: none; } }
+
+#fps { position: absolute; top: max(10px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); font: 600 11px ui-monospace, monospace; color: #9f9; background: rgba(0,0,0,0.5); padding: 3px 6px; border-radius: 6px; pointer-events: none !important; }

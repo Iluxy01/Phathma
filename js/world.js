@@ -60,6 +60,9 @@ export const solidCells = new Set();
 export let fuseBox = null;
 export let frontDoor = null;
 export const van = {};
+const lightPool = [];
+const lampsExtra = [];
+const _cand = [];
 export let ambient, moon;
 
 const doorEdge = {}; // key -> door
@@ -213,7 +216,8 @@ function buildWalls(scene) {
   // плинтус снаружи
   // цоколь — только полоса снаружи стен
   box(MW + 0.36, 0.3, 0.12, EXT2, MW / 2, 0.15, -0.12, scene);
-  box(MW + 0.36, 0.3, 0.12, EXT2, MW / 2, 0.15, MH + 0.12, scene);
+  box(8.18, 0.3, 0.12, EXT2, 3.91, 0.15, MH + 0.12, scene);
+  box(7.18, 0.3, 0.12, EXT2, 12.59, 0.15, MH + 0.12, scene);
   box(0.12, 0.3, MH + 0.36, EXT2, -0.12, 0.15, MH / 2, scene);
   box(0.12, 0.3, MH + 0.36, EXT2, MW + 0.12, 0.15, MH / 2, scene);
 }
@@ -250,6 +254,7 @@ function buildDoors(scene) {
       wallSlab(scene, cx, Z, 1.12, 0.12, ROOMS[ra]?.wall || EXT, 2.1, WALL_H);
     }
     pivot.rotation.y = base;
+    pivot.userData.noMerge = true;
     const panelColor = isFront ? 0x5a2e1e : 0x7a5c3e;
     const panel = box(0.92, 2.06, 0.05, panelColor, 0.46, 1.03, 0, pivot);
     panel.userData.kind = 'door';
@@ -318,9 +323,7 @@ function buildLights(scene) {
     roomLights[r] = [];
     G.lightsOn[r] = false;
     for (const [x, z] of ROOMS[r].lights) {
-      const light = new THREE.PointLight(0xffd9a0, 0, 9, 1.4);
-      light.position.set(x, WALL_H - 0.35, z);
-      scene.add(light);
+      const light = null; // реальный свет берётся из пула (см. updateLights)
       // плафон
       const shade = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.18, 6, 1, true), mat(0xd8c8a0, { side: THREE.DoubleSide }));
       shade.position.set(x, WALL_H - 0.2, z);
@@ -334,9 +337,14 @@ function buildLights(scene) {
     }
   }
   // фонарь на крыльце
-  const porch = new THREE.PointLight(0xffb070, 3.5, 7, 1.5);
-  porch.position.set(8.5, 2.3, 10.6);
-  scene.add(porch);
+  lampsExtra.push({ x: 8.5, y: 2.3, z: 10.6, color: 0xffb070, intensity: 3.5, distance: 7, room: '.' });
+  // пул из 5 точечных источников: число источников постоянно (нет перекомпиляции шейдеров)
+  for (let i = 0; i < 5; i++) {
+    const l = new THREE.PointLight(0xffd9a0, 0, 9, 1.4);
+    l.position.set(8, -5, 8);
+    scene.add(l);
+    lightPool.push(l);
+  }
   const pl = new THREE.Mesh(new THREE.IcosahedronGeometry(0.09, 0), new THREE.MeshBasicMaterial({ color: 0xffcc88 }));
   pl.position.set(9.3, 2.2, 10.12); scene.add(pl);
   // щиток в кладовке
@@ -365,21 +373,37 @@ export function setLight(r, on) {
 }
 
 export function updateLights(t) {
-  const gh = G.ghost;
+  const gh = G.ghost, p = G.player;
+  _cand.length = 0;
   for (const r of HOUSE_ROOMS) {
     for (const L of roomLights[r]) {
-      let on = roomLit(r);
+      const on = roomLit(r);
       let k = 1;
       if (on && gh && (gh.hunting || gh.eventActive) && Math.hypot(gh.x - L.x, gh.z - L.z) < 8) {
         // мерцание рядом с призраком
         k = Math.sin(t * 37 + L.x) > 0.2 ? (Math.random() < 0.7 ? 0.05 : 1) : 0.2;
       }
-      L.light.intensity = on ? 3.2 * k : 0;
       L.bulb.material.color.setHex(on && k > 0.5 ? 0xfff0c0 : 0x302a20);
+      if (on) _cand.push({ x: L.x, y: WALL_H - 0.35, z: L.z, color: 0xffd9a0, intensity: 3.2 * k, distance: 9, room: r });
     }
+  }
+  for (const e of lampsExtra) _cand.push(e);
+  // ближайшие лампы получают настоящие источники света; своя комната — в приоритете
+  for (const c of _cand) c.score = Math.hypot(c.x - p.x, c.z - p.z) - (c.room === p.room ? 6 : 0) - (c.room === 'van' && p.inVan ? 6 : 0);
+  _cand.sort((a, b) => a.score - b.score);
+  for (let i = 0; i < lightPool.length; i++) {
+    const l = lightPool[i], c = _cand[i];
+    if (c) { l.position.set(c.x, c.y, c.z); l.color.setHex(c.color); l.intensity = c.intensity; l.distance = c.distance; }
+    else l.intensity = 0;
   }
   fuseBox.led.material.color.setHex(G.power ? 0x20ff40 : 0xff2020);
   fuseBox.lever.position.y = G.power ? 0.08 : -0.08;
+  // часы в коридоре
+  if (clock) {
+    const tm = 3 * 3600 + 7 * 60 + t * 4; // ночь, 3:07 и дальше (время идёт быстрее)
+    clock.min.rotation.z = -(tm / 3600) * Math.PI * 2;
+    clock.hour.rotation.z = -(tm / 43200) * Math.PI * 2;
+  }
 }
 
 // ---------- мебель ----------
@@ -468,6 +492,7 @@ function addProp(scene, kind, x, y, z) {
   m.position.set(x, y + hy, z);
   m.rotation.y = rand(0, Math.PI * 2);
   scene.add(m);
+  m.userData.noMerge = true;
   props.push({ mesh: m, vx: 0, vy: 0, vz: 0, r, hy, snd, rest: true, room: roomAt(x, z) });
 }
 
@@ -547,8 +572,9 @@ function buildOutside(scene) {
   ground.position.set(8, -0.02, 10);
   scene.add(ground);
   // дорожка
+  const stoneMat = new THREE.MeshLambertMaterial({ color: 0x5a5a5a, emissive: 0x111111, flatShading: true });
   for (let z = 10.5; z < 15; z += 0.7) {
-    const s = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.38, 0.06, 6), new THREE.MeshLambertMaterial({ color: 0x5a5a5a, emissive: 0x111111, flatShading: true }));
+    const s = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.38, 0.06, 6), stoneMat);
     s.position.set(8.5 + rand(-0.1, 0.1), 0.02, z); scene.add(s);
   }
   // крыльцо
@@ -619,7 +645,8 @@ function buildVan(scene) {
   const g = new THREE.Group();
   g.position.set(8.5, 0, 17.2);
   const vanCol = 0xd8d8d0;
-  const vm = (c) => new THREE.MeshLambertMaterial({ color: c, emissive: 0x111111, flatShading: true });
+  const vmCache = new Map();
+  const vm = (c) => { if (!vmCache.has(c)) vmCache.set(c, new THREE.MeshLambertMaterial({ color: c, emissive: 0x111111, flatShading: true })); return vmCache.get(c); };
   const add = (w, h, d, c, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), vm(c)); m.position.set(x, y, z); g.add(m); return m; };
   add(2.4, 0.1, 4.4, 0x444444, 0, 0.35, 0);                 // пол
   add(0.08, 2.0, 4.4, vanCol, -1.2, 1.35, 0);                // левая стенка
@@ -667,9 +694,14 @@ function buildVan(scene) {
   btn.position.set(0.85, 1.01, 1.2); g.add(btn);
   btn.userData.kind = 'leave'; interactables.push(btn);
   add(0.35, 0.03, 0.35, 0x222222, 0.85, 0.99, 1.2).userData.kind = 'leave';
+  // доска с делом на перегородке
+  const wc = document.createElement('canvas'); wc.width = 512; wc.height = 320;
+  const wtex = new THREE.CanvasTexture(wc);
+  const wb = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.69), new THREE.MeshBasicMaterial({ map: wtex, color: 0xd8d8d8 }));
+  wb.position.set(-0.35, 1.5, 2.15); wb.rotation.y = Math.PI; g.add(wb);
+  add(1.16, 0.75, 0.02, 0x8a8a8a, -0.35, 1.5, 2.165);
   // свет в фургоне
-  const vl = new THREE.PointLight(0xc0d8ff, 2.5, 6, 1.2);
-  vl.position.set(0, 2.1, 0); g.add(vl);
+  lampsExtra.push({ x: 8.5, y: 2.1, z: 17.2, color: 0xc0d8ff, intensity: 2.5, distance: 6, room: 'van' });
   const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.04, 0.15), new THREE.MeshBasicMaterial({ color: 0xe0f0ff }));
   lamp.position.set(0, 2.29, 0); g.add(lamp);
   scene.add(g);
@@ -679,7 +711,7 @@ function buildVan(scene) {
   addCollider(5.9, 7.3, 14.9, 15.1, 'van'); addCollider(9.7, 11.1, 14.9, 15.1, 'van');
   addCollider(7.3, 7.62, 15.2, 19.2, 'furn', { top: 2 }); // стеллаж
   addCollider(9.2, 9.6, 16.35, 18.6, 'furn', { top: 0.98 }); // стол
-  Object.assign(van, { group: g, rackSlots, monitor, sanityBoard, sanityCanvas: sc, sanityTex: stex, x: 8.5, z: 17.2 });
+  Object.assign(van, { group: g, rackSlots, boardCanvas: wc, boardTex: wtex, monitor, sanityBoard, sanityCanvas: sc, sanityTex: stex, x: 8.5, z: 17.2 });
 }
 
 export function inVanArea(x, z) { return x > 7.3 && x < 9.7 && z > 15.0 && z < 19.4; }
@@ -711,10 +743,74 @@ export function drawSanityBoard() {
   van.sanityTex.needsUpdate = true;
 }
 
+export function drawCaseBoard(lines) {
+  const c = van.boardCanvas, x = c.getContext('2d');
+  x.fillStyle = '#f4f2ea'; x.fillRect(0, 0, 512, 320);
+  x.strokeStyle = '#9a9a9a'; x.lineWidth = 6; x.strokeRect(3, 3, 506, 314);
+  x.fillStyle = '#1a3a8a'; x.font = 'bold 34px sans-serif'; x.fillText(lines.title, 20, 46);
+  x.font = '23px sans-serif';
+  let y = 86;
+  for (const l of lines.rows) {
+    x.fillStyle = l.done ? '#1a7a2a' : l.bad ? '#a02020' : '#222';
+    x.fillText(l.text.length > 38 ? l.text.slice(0, 37) + '…' : l.text, 20, y); y += 33;
+  }
+  van.boardTex.needsUpdate = true;
+}
+
+// ---------- статическая склейка геометрии (сильно меньше вызовов отрисовки) ----------
+export function mergeStatic(scene) {
+  scene.updateMatrixWorld(true);
+  const groups = new Map(), victims = [];
+  scene.traverse((o) => {
+    if (!o.isMesh || !o.visible) return;
+    const m = o.material;
+    if (!m || Array.isArray(m) || !(m.isMeshLambertMaterial || m.isMeshBasicMaterial) || m.map || m.transparent || m.vertexColors) return;
+    if (m.isMeshBasicMaterial && !(m === glassM || m === glintM)) return;
+    let block = false;
+    for (let a = o; a; a = a.parent) {
+      if (!a.visible || a.userData.noMerge || a.isCamera) return;
+      if (a.userData.kind) { if (a.userData.kind === 'block') block = true; else return; }
+    }
+    const key = m.uuid + (block ? ':b' : '');
+    if (!groups.has(key)) groups.set(key, { m, block, parts: [], n: 0 });
+    let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    g.applyMatrix4(o.matrixWorld);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    const gr = groups.get(key);
+    gr.parts.push(g); gr.n += g.attributes.position.count;
+    victims.push(o);
+  });
+  for (const o of victims) {
+    o.parent.remove(o);
+    if (o.userData.kind === 'block') { const i = interactables.indexOf(o); if (i >= 0) interactables.splice(i, 1); }
+  }
+  let calls = 0;
+  for (const gr of groups.values()) {
+    const pos = new Float32Array(gr.n * 3), nor = new Float32Array(gr.n * 3);
+    let off = 0;
+    for (const g of gr.parts) {
+      pos.set(g.attributes.position.array, off); nor.set(g.attributes.normal.array, off);
+      off += g.attributes.position.array.length;
+      g.dispose();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.computeBoundingSphere(); geo.computeBoundingBox();
+    const mesh = new THREE.Mesh(geo, gr.m);
+    mesh.matrixAutoUpdate = false;
+    if (gr.block) { mesh.userData.kind = 'block'; interactables.push(mesh); }
+    scene.add(mesh);
+    calls++;
+  }
+  return { merged: victims.length, calls };
+}
+
 // ---------- декор: окна и картины ----------
+const glassM = new THREE.MeshBasicMaterial({ color: 0x18284a });
+const glintM = new THREE.MeshBasicMaterial({ color: 0x2c3c66 });
 function windowAt(scene, cx, cz, alongX, inward) {
   // alongX: окно тянется вдоль X (стена z = const); inward: +1/-1 — сторона комнаты
-  const glassM = new THREE.MeshBasicMaterial({ color: 0x18284a });
   for (const side of [inward, -inward]) {
     const off = side * 0.068;
     const g = new THREE.Group();
@@ -728,7 +824,7 @@ function windowAt(scene, cx, cz, alongX, inward) {
     box(0.03, 0.9, 0.03, fc, 0, 0, 0.01, g); box(0.9, 0.03, 0.03, fc, 0, 0, 0.01, g);
     if (side === inward) box(1.1, 0.04, 0.12, fc, 0, -0.52, 0.05, g); // подоконник
     // луна в стекле — лёгкий блик
-    const glint = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.4), new THREE.MeshBasicMaterial({ color: 0x3a4c78, transparent: true, opacity: 0.6 }));
+    const glint = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.4), glintM);
     glint.position.set(-0.2, 0.15, 0.002); glint.rotation.z = 0.5; g.add(glint);
     scene.add(g);
   }
@@ -768,7 +864,54 @@ function paintingAt(scene, x, z, rotY) {
   scene.add(g);
 }
 
+let clock = null;
+export function clockPos() { return clock; }
+
+function moonPatch(scene, cx, cz, alongX, inward) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(alongX ? 0.95 : 1.3, alongX ? 1.3 : 0.95),
+    new THREE.MeshBasicMaterial({ color: 0x3c5488, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(alongX ? cx + 0.25 : cx + inward * 0.75, 0.025, alongX ? cz + inward * 0.75 : cz + 0.25);
+  scene.add(m);
+}
+
+function webTex() {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d');
+  x.strokeStyle = 'rgba(230,230,230,0.7)'; x.lineWidth = 1;
+  for (let i = 0; i < 7; i++) { const a = i / 6 * Math.PI / 2; x.beginPath(); x.moveTo(0, 0); x.lineTo(Math.cos(a) * 64, Math.sin(a) * 64); x.stroke(); }
+  for (let r = 10; r < 64; r += 9) { x.beginPath(); for (let i = 0; i <= 6; i++) { const a = i / 6 * Math.PI / 2, rr = r + (i % 2) * 3; i ? x.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : x.moveTo(Math.cos(a) * rr, Math.sin(a) * rr); } x.stroke(); }
+  return new THREE.CanvasTexture(c);
+}
+
 function buildDecor(scene) {
+  for (const [cx, cz, ax, inw] of [[1.8, 0, true, 1], [7.5, 0, true, 1], [13.5, 0, true, 1], [16, 5.0, false, -1], [0, 9.2, false, 1], [3.0, 10, true, -1], [16, 8.6, false, -1], [12.8, 10, true, -1]]) moonPatch(scene, cx, cz, ax, inw);
+  // паутина в углах под потолком
+  const wt = webTex();
+  const webM = new THREE.MeshBasicMaterial({ map: wt, transparent: true, depthWrite: false, side: THREE.DoubleSide, opacity: 0.6 });
+  for (const [x, z, ry] of [[0.07, 0.07, 0], [15.93, 0.07, -Math.PI / 2], [0.07, 9.93, Math.PI / 2], [5.07, 5.07, 0], [15.93, 9.93, Math.PI], [9.93, 4.07, -Math.PI / 2]]) {
+    const w = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), webM);
+    w.position.set(x, WALL_H - 0.02, z);
+    w.rotation.set(-Math.PI / 4, ry + Math.PI / 4, 0, 'YXZ');
+    w.geometry.translate(0.25, -0.25, 0);
+    scene.add(w);
+  }
+  // настенные часы в коридоре
+  const cg = new THREE.Group();
+  cg.position.set(9.92, 1.85, 6.5); cg.rotation.y = -Math.PI / 2;
+  const face = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.03, 12), mat(0x3a2414));
+  face.rotation.x = Math.PI / 2; cg.add(face);
+  const dial = new THREE.Mesh(new THREE.CircleGeometry(0.145, 12), new THREE.MeshLambertMaterial({ color: 0xe8e0c8 }));
+  dial.position.z = 0.017; cg.add(dial);
+  for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; const tick = box(0.012, 0.03, 0.004, 0x222222, Math.sin(a) * 0.12, Math.cos(a) * 0.12, 0.02, cg); tick.rotation.z = -a; }
+  const min = new THREE.Group(); min.position.z = 0.024; cg.add(min);
+  box(0.01, 0.12, 0.004, 0x111111, 0, 0.055, 0, min);
+  const hour = new THREE.Group(); hour.position.z = 0.026; cg.add(hour);
+  box(0.014, 0.08, 0.004, 0x111111, 0, 0.035, 0, hour);
+  min.userData.noMerge = true; hour.userData.noMerge = true;
+  scene.add(cg);
+  clock = { min, hour, x: 9.9, z: 6.5 };
+
   windowAt(scene, 1.8, 0, true, 1);
   windowAt(scene, 7.5, 0, true, 1);
   windowAt(scene, 13.5, 0, true, 1);
@@ -787,7 +930,8 @@ function buildDecor(scene) {
   // плинтусы по периметру комнат (только наружные стены)
   const bm = 0x3a2c22;
   box(MW, 0.08, 0.02, bm, MW / 2, 0.04, 0.075, scene);
-  box(MW, 0.08, 0.02, bm, MW / 2, 0.04, MH - 0.075, scene);
+  box(8, 0.08, 0.02, bm, 4, 0.04, MH - 0.075, scene);
+  box(7, 0.08, 0.02, bm, 12.5, 0.04, MH - 0.075, scene);
   box(0.02, 0.08, MH, bm, 0.075, 0.04, MH / 2, scene);
   box(0.02, 0.08, MH, bm, MW - 0.075, 0.04, MH / 2, scene);
 }

@@ -864,6 +864,10 @@ export function evaluatePhoto(cam) {
       return { label: 'Призрак', stars: 3 };
     }
   }
+  if (gh && gh.dots && gh.dots.visible) {
+    tmpV.set(gh.x, 1.0, gh.z);
+    if (frustum.containsPoint(tmpV) && Math.hypot(gh.x - p.x, gh.z - p.z) < 8) return { label: 'Силуэт в лазерной сетке', stars: 2 };
+  }
   for (const pr of G.prints) {
     pr.mesh.getWorldPosition(tmpV);
     if (pr.mesh.visible && frustum.containsPoint(tmpV) && tmpV.distanceTo(cam.position) < 4) return { label: pr.foot ? 'Следы' : 'Отпечаток руки', stars: 2 };

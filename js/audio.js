@@ -480,6 +480,12 @@ export const sfx = {
     voice(g, t + 0.1, { f0: f0 * 0.8, f0End: f0 * 1.25, dur: rnd(0.7, 1.1), vowels: [vs[Math.floor(rnd(0, 5))], vs[Math.floor(rnd(0, 5))], vs[Math.floor(rnd(0, 5))]], vol: 0.8, vib: 3, rasp: 0.9 });
     nz(d, t, { buf: PINK, f: 2000, q: 0.6, dur: 1.4, a: 0.3, vol: 0.12 });
   },
+  tick(x, z) {
+    if (!ctx) return;
+    const t = ctx.currentTime, d = route(x, z, 1.8, 0.4);
+    nz(d, t, { f: 3200, q: 6, dur: 0.02, vol: 0.12 });
+    osc(d, t, { f: 1900, dur: 0.03, vol: 0.02 });
+  },
   rattle(x, z) {
     if (!ctx) return;
     const t = ctx.currentTime, d = route(x, z, 1.2, 1.2);
