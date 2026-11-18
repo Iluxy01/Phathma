@@ -650,6 +650,7 @@ function startGame(opts) {
   if (opts.role) MP.onGameStart(opts.role);
   UI.hide('menu'); UI.hide('mpScreen');
   UI.show('hud');
+  G.uiOpen = null;   // окно лобби закрыто — иначе управление не работает
   G.running = true;
   G.player.flashlight = true;
   if (opts.role === 'client') { G.player.x = 8.9; G.player.z = 18.2; }

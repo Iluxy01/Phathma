@@ -305,18 +305,25 @@ export class MqttLink {
       let done = false, failed = 0;
       const urls = this.brokers();
       const to = setTimeout(() => { if (!done) { done = true; rej(new Error('нет связи ни с одним сервером. Проверьте интернет')); } }, 10000);
-      for (const url of urls) {
+      const open = (url, idx) => {
         const c = new MqttConn(url, 'ph' + this.sid + Math.random().toString(36).slice(2, 6), (t, m) => this.recv(m), (conn, up) => {
+          if (up) { this.urlUp = this.urlUp || {}; this.urlUp[idx] = true; this.retry = this.retry || {}; this.retry[idx] = 0; }
           if (up && !done) { done = true; clearTimeout(to); res(); }
           if (!up && !done && ++failed === urls.length) { done = true; clearTimeout(to); rej(new Error('серверы связи недоступны. Проверьте интернет')); }
-          if (!up && done && this.conns.every(x => !x.ok) && this.cb.onError) this.cb.onError({ type: 'все серверы связи отключились' });
+          // оборвался работавший сервер — переподключаемся
+          // (повторяем, пока сервер не вернётся: 2, 4, 6… до 10 с между попытками)
+          if (!up && this.urlUp && this.urlUp[idx] && !this.closed) {
+            this.retry[idx] = Math.min(5, (this.retry[idx] || 0) + 1);
+            setTimeout(() => { if (!this.closed) open(url, idx); }, 2000 * this.retry[idx]);
+          }
         });
         c.subscribe(this.myTopic);
-        this.conns.push(c);
-      }
+        this.conns[idx] = c;
+      };
+      urls.forEach((u, i) => open(u, i));
     });
   }
-  pub(obj) { obj.f = this.sid; for (const c of this.conns) c.publish(this.peerTopic, obj); }
+  pub(obj) { obj.f = this.sid; for (const c of this.conns) if (c) c.publish(this.peerTopic, obj); }
   async host(code, nick) { this.role = 'host'; this.nick = nick; await this.connect(code); }
   async join(code, nick) { this.role = 'client'; this.nick = nick; await this.connect(code); this.pub({ k: 'h', n: nick, v: PROTO }); this.helloT = performance.now(); }
   recv(m) {
@@ -325,6 +332,13 @@ export class MqttLink {
     if (this.partner && m.f !== this.partner) { if (m.k === 'h' && this.role === 'host') this.pub({ k: 'full' }); return; }
     if (m.k === 'full') { this.cb.onError && this.cb.onError({ type: 'в этой игре уже двое игроков' }); return; }
     this.lastHeard = performance.now();
+    if (this.lost && this.partner === m.f) { this.lost = false; this.cb.onBack && this.cb.onBack(); }
+    if (m.k === 'x') {
+      if (Number.isFinite(m.a)) this.recv({ k: 'a', a: m.a, f: m.f });
+      if (m.q) this.recv({ k: 'm', q: m.q, f: m.f });            // сначала события (например, «старт»)
+      if (m.s) this.recv({ k: 's', n: m.n, s: m.s, f: m.f });
+      return;
+    }
     if (m.k === 'h') {
       if (m.v !== PROTO) return;
       if (!this.partner) {
@@ -353,9 +367,8 @@ export class MqttLink {
       this.ackDirty = true;
     }
   }
-  send(m) { this.out.push({ s: ++this.seq, m, t: 0 }); this.flushMsgs(); }
-  flushMsgs() {
-    if (!this.partner) return;
+  send(m) { this.out.push({ s: ++this.seq, m, t: 0 }); }
+  takeMsgs() {
     const t = performance.now();
     // новые и давно не подтверждённые (повтор через 600 мс), до ~8 КБ за пакет
     const q = []; let size = 0;
@@ -365,22 +378,24 @@ export class MqttLink {
       if (size + b > 8000 && q.length) break;
       q.push([e.s, e.m]); e.t = t; size += b;
     }
-    if (q.length) this.pub({ k: 'm', q });
+    return q;
   }
   setState(s) { this.state = s; this.stateDirty = true; }
   tick() {
     const t = performance.now();
-    if (this.role === 'client' && !this.partner && this.conns.some(c => c.ok) && t - (this.helloT || 0) > 1500) {
+    if (this.role === 'client' && !this.partner && this.conns.some(c => c && c.ok) && t - (this.helloT || 0) > 1500) {
       this.pub({ k: 'h', n: this.nick, v: PROTO }); this.helloT = t;   // повторяем приветствие, пока хост не ответит
     }
     if (!this.partner) return;
-    if (this.ackDirty) { this.ackDirty = false; this.pub({ k: 'a', a: this.rx }); }
-    if (this.stateDirty) { this.stateDirty = false; this.pub({ k: 's', n: ++this.stN, s: this.state }); }
-    this.flushMsgs();
-    if (t - this.lastHeard > 10000) {
-      this.partner = null; this.rx = 0; this.early.clear();
-      this.cb.onLeave && this.cb.onLeave('timeout');
-    }
+    if (t - (this.lastPub || 0) < 95) return;          // ~10 пакетов в секунду на сервер
+    // всё в одном пакете: состояние, подтверждение, новые/повторные события
+    const pk = { k: 'x', a: this.rx };
+    if (this.stateDirty) { this.stateDirty = false; pk.n = ++this.stN; pk.s = this.state; }
+    const q = this.takeMsgs();
+    if (q.length) pk.q = q;
+    if (pk.s || pk.q || this.ackDirty || t - (this.lastPub || 0) > 1000) { this.ackDirty = false; this.lastPub = t; this.pub(pk); }
+    // долгая тишина: сообщаем, но напарника не забываем — связь может вернуться
+    if (!this.lost && t - this.lastHeard > 8000) { this.lost = true; this.cb.onLeave && this.cb.onLeave('timeout'); }
   }
-  close() { clearInterval(this.timer); for (const c of this.conns) c.close(); this.conns = []; }
+  close() { this.closed = true; clearInterval(this.timer); for (const c of this.conns) c && c.close(); this.conns = []; }
 }

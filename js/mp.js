@@ -127,7 +127,7 @@ function errText(e) {
 function newLink() {
   if (link) { link.close(); link = null; }
   link = transport === 'room' ? new RoomLink(room) : $('mpMode').value === 'p2p' ? new PeerLink() : new MqttLink();
-  link.on({ onPartner, onMsg, onState, onLeave, onError: (e) => setStatus('Ошибка сети: ' + errText(e) + (link && link.kind === 'p2p' ? '. Попробуйте способ «Через сервер».' : '')) });
+  link.on({ onPartner, onMsg, onState, onLeave, onBack, onError: (e) => setStatus('Ошибка сети: ' + errText(e) + (link && link.kind === 'p2p' ? '. Попробуйте способ «Через сервер».' : '')) });
 }
 
 async function createGame() {
@@ -163,7 +163,7 @@ async function joinGame(code) {
 
 function onPartner(nick) {
   partnerNick = nick;
-  if (G.running) { toast(`${nick} снова на связи`); return; }
+  if (G.running) { onBack(); toast(`${nick} снова на связи`); return; }
   if (isHost()) {
     setStatus(`${nick} подключился! Сложность — как выбрана в главном меню.`);
     $('mpGo').classList.remove('hidden');
@@ -189,14 +189,23 @@ function onLeave() {
     $('mpGo').classList.add('hidden');
     return;
   }
-  if (isHost()) {
-    toast('Напарник отключился. Можно продолжать одному.', 5);
-    G.remote = null;
-    if (avatar) avatar.group.visible = false;
-  } else {
-    toast('Связь с хостом потеряна', 5);
-    ctx.endGame('Связь с хостом потеряна — игра прервана.');
-  }
+  // связь пропала: ждём до 60 с, вдруг вернётся (сворачивали приложение, плохая сеть)
+  if (lostTimer) return;
+  if (G.remote) G.remote.ok = false;
+  if (avatar) avatar.group.visible = false;
+  toast(isHost() ? 'Связь с напарником прервалась — ждём переподключения…' : 'Связь с хостом прервалась — ждём переподключения…', 6);
+  lostTimer = setTimeout(() => {
+    lostTimer = 0;
+    if (!G.running) return;
+    if (isHost()) toast('Напарник так и не вернулся. Можно продолжать одному.', 5);
+    else ctx.endGame('Связь с хостом потеряна — игра прервана.');
+  }, 60000);
+}
+let lostTimer = 0;
+function onBack() {
+  if (!lostTimer) return;
+  clearTimeout(lostTimer); lostTimer = 0;
+  toast('Связь восстановлена', 3);
 }
 
 // ================= ИГРА =================
@@ -268,7 +277,7 @@ function onState(s) {
     rbuf.push({ at: now(), x: me.x, z: me.z, yaw: r.yaw, pitch: r.pitch });
     if (rbuf.length > 40) rbuf.shift();
   }
-  if (isClient() && s.w) applyWorld(s.w);
+  if (isClient() && s.w && G.running && G.ghost) applyWorld(s.w);
 }
 
 function applyWorld(w) {
@@ -291,7 +300,9 @@ export function syncTime() {
   if (!tRecv) return;
   G.t = tBase + (now() - tRecv) / 1000;
 }
-export function renderAt() { return now() - INTERP; }
+export function renderAt() { return now() - interp(); }
+// через серверы снимки приходят 10 раз в секунду — смотрим чуть дальше в прошлое
+function interp() { return link && link.kind === 'mqtt' ? 220 : INTERP; }
 
 // ---------- сообщения ----------
 function onMsg(m) {
@@ -452,7 +463,7 @@ function updateAvatar(dt) {
   const g = avatar.group;
   if (!r || !r.ok || r.dead || r.hid >= 0) { g.visible = false; avatar.spot.intensity = 0; return; }
   // интерполяция между снимками
-  const t = now() - INTERP;
+  const t = now() - interp();
   let a = rbuf[0], c = rbuf[rbuf.length - 1];
   if (!a) return;
   for (let i = 0; i < rbuf.length - 1; i++) if (rbuf[i].at <= t && rbuf[i + 1].at >= t) { a = rbuf[i]; c = rbuf[i + 1]; break; }
