@@ -160,3 +160,54 @@ export function initLayoutEditor() {
   });
   $('layDone').addEventListener('click', closeEditor);
 }
+
+// ---------- прокрутка окон пальцем ----------
+// Встроенная прокрутка браузера не работает в повёрнутом интерфейсе (палец двигается
+// поперёк оси окна), поэтому листаем сами, в логических координатах игры.
+let sc = null, flingRaf = 0, suppressClick = false;
+function scrollableFrom(el) {
+  for (let e = el; e && e !== document.body; e = e.parentElement) {
+    if (e.id === 'hud' || e.id === 'touch') return null;
+    const oy = getComputedStyle(e).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && e.scrollHeight > e.clientHeight + 1) return e;
+  }
+  return null;
+}
+document.addEventListener('pointerdown', (e) => {
+  suppressClick = false;
+  if (e.pointerType === 'mouse') return;
+  const el = scrollableFrom(e.target);
+  if (!el) return;
+  cancelAnimationFrame(flingRaf);
+  const q = toLogical(e.clientX, e.clientY);
+  sc = { el, id: e.pointerId, y: q.y, moved: 0, v: 0, t: performance.now() };
+}, true);
+document.addEventListener('pointermove', (e) => {
+  if (!sc || e.pointerId !== sc.id) return;
+  const q = toLogical(e.clientX, e.clientY);
+  const dy = q.y - sc.y, now = performance.now();
+  sc.y = q.y;
+  sc.el.scrollTop -= dy;
+  sc.moved += Math.abs(dy);
+  const dt = Math.max(1, now - sc.t); sc.t = now;
+  sc.v = sc.v * 0.6 + (-dy / dt) * 0.4;   // пикселей за мс
+}, true);
+const endScroll = (e) => {
+  if (!sc || e.pointerId !== sc.id) return;
+  const s = sc; sc = null;
+  if (s.moved > 8) { suppressClick = true; setTimeout(() => { suppressClick = false; }, 300); }
+  // инерция
+  let v = s.v * 16;
+  const step = () => {
+    if (Math.abs(v) < 0.3) return;
+    s.el.scrollTop += v; v *= 0.93;
+    flingRaf = requestAnimationFrame(step);
+  };
+  if (s.moved > 8) step();
+};
+document.addEventListener('pointerup', endScroll, true);
+document.addEventListener('pointercancel', endScroll, true);
+// если листали — это не нажатие на кнопку
+document.addEventListener('click', (e) => {
+  if (suppressClick) { suppressClick = false; e.stopPropagation(); e.preventDefault(); }
+}, true);
