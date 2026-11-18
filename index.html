@@ -178,6 +178,9 @@
     <h2>Игра вдвоём</h2>
     <p class="hint" id="mpVia"></p>
     <label class="row">Ваше имя <input id="mpNick" maxlength="14" placeholder="Игрок" autocomplete="off"></label>
+    <label class="row hidden" id="mpModeRow">Способ связи
+      <select id="mpMode"><option value="mqtt" selected>Через сервер (надёжно)</option><option value="p2p">Напрямую P2P</option></select>
+    </label>
     <div id="mpStep1">
       <button class="btn primary" id="mpCreate">Создать игру</button>
       <div class="mpjoin"><input id="mpCode" inputmode="numeric" maxlength="6" placeholder="Код игры" autocomplete="off"><button class="btn" id="mpJoin">Войти</button></div>

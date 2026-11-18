@@ -11,7 +11,7 @@ import * as CU from './cursed.js';
 import * as AP from './appliances.js';
 import * as UI from './ui.js';
 import { sfx, playRelayed, initAudio } from './audio.js';
-import { RoomLink, PeerLink, getRoom, loadPeerJs, peerAvailable } from './net.js';
+import { RoomLink, PeerLink, MqttLink, getRoom, loadPeerJs, peerAvailable } from './net.js';
 
 const $ = (id) => document.getElementById(id);
 const INTERP = 120;              // задержка интерполяции, мс
@@ -31,6 +31,8 @@ const fin = (v) => Number.isFinite(v);
 export function init(c) {
   ctx = c;
   $('btnMp').addEventListener('click', openLobby);
+  try { const m = localStorage.getItem('phathma.mpmode'); if (m) $('mpMode').value = m; } catch (_) { /* */ }
+  $('mpMode').addEventListener('change', () => { try { localStorage.setItem('phathma.mpmode', $('mpMode').value); } catch (_) { /* */ } if (!G.running && transport === 'net') openLobby(); });
   $('mpBack').addEventListener('click', closeLobby);
   $('mpCreate').addEventListener('click', () => { initAudio(); ctx.goFullscreen(); createGame(); });
   $('mpJoin').addEventListener('click', () => { initAudio(); ctx.goFullscreen(); joinGame($('mpCode').value.trim()); });
@@ -57,8 +59,16 @@ async function openLobby() {
     room = await getRoom();
     if (room) transport = 'room';
     else if (window.claude) transport = 'noroom';   // claude.ai без доступа к общему каналу
-    else if (await loadPeerJs()) transport = 'p2p';
-    else transport = 'none';
+    else transport = 'net';   // HTML-файл / обычный сайт: сервер (MQTT) или P2P на выбор
+  }
+  if (transport === 'net') {
+    $('mpModeRow').classList.remove('hidden');
+    const mode = $('mpMode').value;
+    $('mpVia').textContent = mode === 'p2p'
+      ? 'Напрямую между устройствами (WebRTC). Быстрее, но у некоторых мобильных операторов не соединяется.'
+      : 'Через бесплатные серверы связи (сразу три, для надёжности). Работает в любой сети с интернетом.';
+    $('mpCreate').disabled = false; $('mpJoin').disabled = false;
+    return;
   }
   if (transport === 'room') $('mpVia').textContent = 'Связь через claude.ai. Напарнику нужен доступ к этой странице (кнопка «Поделиться»).';
   else if (transport === 'p2p') $('mpVia').textContent = 'Прямое соединение через интернет (бесплатный сервер PeerJS). Оба игрока должны быть онлайн.';
@@ -95,14 +105,34 @@ function nickInput() {
   saveNick(myNick);
   return myNick;
 }
+async function ensureMode() {
+  if (transport !== 'net' || $('mpMode').value !== 'p2p') return true;
+  if (await loadPeerJs()) return true;
+  toast('Не удалось загрузить модуль P2P — выберите «Через сервер»', 4);
+  return false;
+}
+// понятное описание ошибки сети
+function errText(e) {
+  const t = (e && (e.type || e.message)) || String(e);
+  const map = {
+    'server-error': 'сервер знакомства P2P не отвечает',
+    'network': 'нет связи с сервером знакомства P2P',
+    'unavailable-id': 'такой код уже занят — создайте игру ещё раз',
+    'peer-unavailable': 'игра с этим кодом не найдена',
+    'browser-incompatible': 'этот браузер не поддерживает P2P',
+    'socket-error': 'обрыв связи с сервером',
+  };
+  return map[t] || t;
+}
 function newLink() {
   if (link) { link.close(); link = null; }
-  link = transport === 'room' ? new RoomLink(room) : new PeerLink();
-  link.on({ onPartner, onMsg, onState, onLeave, onError: (e) => setStatus('Ошибка сети: ' + (e && e.type || e)) });
+  link = transport === 'room' ? new RoomLink(room) : $('mpMode').value === 'p2p' ? new PeerLink() : new MqttLink();
+  link.on({ onPartner, onMsg, onState, onLeave, onError: (e) => setStatus('Ошибка сети: ' + errText(e) + (link && link.kind === 'p2p' ? '. Попробуйте способ «Через сервер».' : '')) });
 }
 
 async function createGame() {
   nickInput();
+  if (!(await ensureMode())) return;
   const code = String(Math.floor(transport === 'room' ? 1000 + Math.random() * 9000 : 100000 + Math.random() * 900000));
   newLink();
   G.mp = { role: 'host', send: (t, d) => link.send([t, d]) };
@@ -111,13 +141,14 @@ async function createGame() {
   $('mpGo').classList.add('hidden');
   setStatus('Создаём игру…');
   try { await link.host(code, myNick); }
-  catch (e) { setStatus('Не удалось создать игру: ' + (e.message || e.type || e) + '. Попробуйте ещё раз.'); return; }
+  catch (e) { setStatus('Не удалось создать игру: ' + errText(e) + (link.kind === 'p2p' ? '. Попробуйте способ «Через сервер».' : '. Попробуйте ещё раз.')); return; }
   setStatus('Ждём напарника… Скажите ему код игры.');
 }
 
 async function joinGame(code) {
   if (!/^\d{4,6}$/.test(code)) { toast('Введите код из 4–6 цифр'); return; }
   nickInput();
+  if (!(await ensureMode())) return;
   newLink();
   G.mp = { role: 'client', send: (t, d) => link.send([t, d]) };
   showStep(2);
@@ -125,9 +156,9 @@ async function joinGame(code) {
   $('mpGo').classList.add('hidden');
   setStatus('Подключаемся…');
   try { await link.join(code, myNick); }
-  catch (e) { setStatus('Не удалось подключиться: ' + (e.message || e.type || e)); G.mp = null; return; }
+  catch (e) { setStatus('Не удалось подключиться: ' + errText(e) + (link.kind === 'p2p' ? '. Попробуйте способ «Через сервер» (оба игрока).' : '')); G.mp = null; return; }
   setStatus('Ищем игру с этим кодом…');
-  setTimeout(() => { if (!partnerNick && G.mp && !G.running) setStatus('Игра не найдена. Проверьте код или попросите напарника создать игру заново.'); }, 15000);
+  setTimeout(() => { if (!partnerNick && G.mp && !G.running) setStatus('Игра не найдена. Проверьте код и что у обоих выбран один способ связи. Хост должен держать экран лобби открытым.'); }, 15000);
 }
 
 function onPartner(nick) {
