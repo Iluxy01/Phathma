@@ -46,7 +46,7 @@ export function renderJournal() {
     const b = document.createElement('button');
     b.className = 'ev' + (st === 1 ? ' yes' : st === 2 ? ' no' : '');
     b.innerHTML = `<span class="mark">${st === 1 ? '✓' : st === 2 ? '✕' : ''}</span><span>${EVIDENCE[k].name}</span>`;
-    b.onclick = () => { ev[k] = ((ev[k] || 0) + 1) % 3; renderJournal(); };
+    b.onclick = () => { ev[k] = ((ev[k] || 0) + 1) % 3; if (G.onJournal) G.onJournal(); renderJournal(); };
     evList.appendChild(b);
   }
   const yes = Object.keys(ev).filter(k => ev[k] === 1);
@@ -59,7 +59,7 @@ export function renderJournal() {
     b.className = 'gh' + (possible ? '' : ' out') + (G.journal.guess === g.id ? ' sel' : '') + (viewGhost === g.id ? ' view' : '');
     b.innerHTML = `${G.journal.guess === g.id ? '◉ ' : ''}${g.name}<span class="evs">${g.ev.map(e => EVIDENCE[e].short).join(' · ')}</span>`;
     b.onclick = () => {
-      if (viewGhost === g.id) G.journal.guess = G.journal.guess === g.id ? null : g.id;
+      if (viewGhost === g.id) { G.journal.guess = G.journal.guess === g.id ? null : g.id; if (G.onJournal) G.onJournal(); }
       viewGhost = g.id;
       renderJournal();
     };
@@ -160,8 +160,9 @@ export function updateHUD(target) {
 }
 
 // ---------- результаты ----------
-export function showResult(dead) {
+export function showResult(dead, note = '') {
   const gh = G.ghost;
+  if (!gh) return;
   const guess = GHOSTS.find(g => g.id === G.journal.guess);
   const correct = guess && guess.id === gh.def.id;
   let money = 0;
@@ -184,9 +185,11 @@ export function showResult(dead) {
     G.saveProfile();
     lines.push(`Всего на счету: $${G.profile.money} · уровень ${Math.floor(G.profile.xp / 150) + 1}`);
   }
+  if (G.mp && G.remote && G.remote.n) lines.push(`Напарник ${G.remote.n}: ${G.remote.dead ? '<span class="bad-text">погиб</span>' : 'выжил'}${G.remote.ps ? ` · фото ${G.remote.ps}★` : ''}`);
   if (gh.hidden && gh.hidden.length) lines.push(`<span style="color:var(--muted)">Скрытые улики: ${gh.hidden.map(e => EVIDENCE[e].name).join(', ')}</span>`);
   $('resultBody').innerHTML = `
     <h2>${dead ? 'Вас настиг призрак' : 'Расследование завершено'}</h2>
+    ${note ? `<p class="hint">${note.replace(/[<>&]/g, '')}</p>` : ''}
     <p>Это был</p>
     <div class="result-ghost">${gh.def.name}</div>
     <p>${gh.fullName}, ${gh.age} лет · комната: ${roomName(gh.home)}</p>

@@ -1,7 +1,7 @@
 // Снаряжение: модели, использование, установка, показания
 import * as THREE from 'three';
-import { G, rand, pick, toast, completeObjective, clamp } from './state.js';
-import { roomAt, roomLit, pointBlocked, segBlocked, collideCircle, colliders, surfaceAt, solidAt, inVanArea, mat, box, interactables } from './world.js';
+import { G, rand, pick, toast, completeObjective, clamp, isClient, isHost, netSend } from './state.js';
+import { roomAt, roomLit, pointBlocked, segBlocked, collideCircle, colliders, surfaceAt, solidAt, inVanArea, mat, box, interactables, doors, switches } from './world.js';
 import { sfx, setStatic, speak } from './audio.js';
 
 export const ITEM_DEFS = {
@@ -253,6 +253,13 @@ function buildMesh(it) {
   return g;
 }
 
+// модель предмета без логики — для руки напарника
+export function displayMesh(type) {
+  const g = buildMesh({ type, def: ITEM_DEFS[type], data: {}, charges: 1 });
+  g.traverse(o => { o.userData = {}; });
+  return g;
+}
+
 export function drawBook(it, written) {
   const x = it.data.canvas.getContext('2d');
   x.fillStyle = '#efe6cf'; x.fillRect(0, 0, 128, 64);
@@ -276,13 +283,48 @@ export function drawBook(it, written) {
   it.data.tex.needsUpdate = true;
 }
 
-export function createItem(type) {
+export function createItem(type, id = null) {
   const def = ITEM_DEFS[type];
-  const it = { id: nextId++, type, def, on: type === 'thermo', charges: def.charges ?? 1, data: {}, placed: false };
+  if (id != null && G.itemsById.has(id)) return G.itemsById.get(id);
+  if (id == null) id = nextId++;
+  const it = { id, type, def, on: type === 'thermo', charges: def.charges ?? 1, data: {}, placed: false };
+  G.itemsById.set(id, it);
   it.mesh = buildMesh(it);
   it.mesh.traverse(o => { if (o.isMesh) o.castShadow = false; });
   return it;
 }
+
+// ---------- сеть: состояние предмета ----------
+export function serItem(it) {
+  const d = it.data;
+  return { i: it.id, t: it.type, o: it.on ? 1 : 0, c: it.charges,
+    d: { w: d.written ? 1 : 0, l: d.lit ? 1 : 0, b: Math.round(d.burn ?? 0), u: d.used ? 1 : 0, bu: +(d.burnUntil || 0).toFixed(1), cg: d.caught || [], sn: +(d.since || 0).toFixed(1) } };
+}
+export function itemFromNet(s) {
+  if (!s || !ITEM_DEFS[s.t]) return null;
+  const it = createItem(s.t, s.i);
+  applyItemState(it, s);
+  return it;
+}
+export function applyItemState(it, s) {
+  it.on = !!s.o;
+  if (Number.isFinite(s.c)) it.charges = s.c;
+  const d = s.d || {};
+  if (d.w && !it.data.written && it.type === 'book') { it.data.written = true; drawBook(it, true); }
+  it.data.lit = !!d.l;
+  if (Number.isFinite(d.b)) it.data.burn = d.b;
+  it.data.used = !!d.u;
+  if (d.bu) it.data.burnUntil = d.bu;
+  if (Array.isArray(d.cg)) it.data.caught = d.cg.slice(0, 20).map(String);
+  if (d.sn) it.data.since = d.sn;
+  if (it.type === 'crucifix') {
+    const c = it.charges >= 2 ? 0xb08a40 : it.charges === 1 ? 0x6a5020 : 0x2a1a10;
+    it.data.m1.material = mat(c); it.data.m2.material = mat(c);
+  }
+  if (it.type === 'smudge' && it.data.used && G.t > (it.data.burnUntil || 0)) it.data.tip.material.color.setHex(0x1a1a1a);
+}
+function itemChanged(it) { if (G.mp && isHost() && it.placed) netSend('pl', { s: serItem(it), x: it.x, z: it.z, y: it.y, yaw: it.yaw, ly: it.lying ? 1 : 0 }); }
+G.itemChanged = itemChanged;
 
 // ---------- инвентарь ----------
 export function selected() { return G.inv[G.sel]; }
@@ -308,24 +350,45 @@ export function takeFromStock(type) {
   if (!G.stock[type]) { toast('Этого предмета больше нет'); return false; }
   let slot = G.inv[G.sel] ? G.inv.findIndex(x => !x) : G.sel;
   if (slot < 0) { toast('Руки заняты — освободите слот'); return false; }
+  if (isClient()) { netSend('take', { t: type }); return true; }
   G.stock[type]--;
   G.inv[slot] = createItem(type);
   G.sel = slot;
   attachHeld();
   refreshRack();
   sfx.click();
+  if (G.mp) netSend('stock', G.stock);
   return true;
+}
+
+// клиент получил предмет от хоста (со стеллажа или подобранный)
+export function giveItem(s) {
+  const it = itemFromNet(s);
+  if (!it) return;
+  const slot = !G.inv[G.sel] ? G.sel : G.inv.findIndex(x => !x);
+  if (slot < 0) { netSend('ret', { t: it.type, u: it.data.used ? 1 : 0 }); toast('Руки заняты'); return; }
+  it.placed = false;
+  it.mesh.scale.setScalar(1);
+  G.inv[slot] = it; G.sel = slot;
+  attachHeld();
+  sfx.click();
+  if (it.type === 'recorder' && it.on) {
+    if (it.data.caught && it.data.caught.length) { toast('🎙 На записи голоса: «' + it.data.caught.join('», «') + '»', 4); sfx.evp(); }
+    else toast('🎙 На записи только шум');
+  }
 }
 
 export function returnToStock(slot) {
   const it = G.inv[slot];
   if (!it) return;
-  if (!it.data.used) G.stock[it.type]++;
+  if (isClient()) netSend('ret', { t: it.type, u: it.data.used ? 1 : 0 });
+  else if (!it.data.used) G.stock[it.type]++;
   if (it.mesh.parent) it.mesh.parent.remove(it.mesh);
   if (it.type === 'box') setStatic(false);
   G.inv[slot] = null;
   attachHeld();
   refreshRack();
+  if (G.mp && isHost()) netSend('stock', G.stock);
 }
 
 function removeFromInv(it) {
@@ -363,6 +426,7 @@ export function placeSelectedNeat() {
   removeFromInv(it);
   placeItem(it, x, z, p.yaw, false, y);
   sfx.impact(x, z, IMPACT[it.type] || 'plastic', 0.3);
+  if (isClient()) netSend('place', { s: serItem(it), x, z, y, yaw: p.yaw });
 }
 
 // бросок: предмет вылетает из руки и падает на пол по дуге
@@ -389,11 +453,26 @@ export function dropSelected() {
   it.mesh.rotation.set(0, p.yaw, 0, 'YXZ');
   it.mesh.position.copy(tmpW);
   scene.add(it.mesh);
-  flying.push({
+  const f = {
     it, x: tmpW.x, y: tmpW.y, z: tmpW.z,
     vx: fx * sp, vy: fy * sp + 1.2, vz: fz * sp,
-    sx: rand(-6, 6), sy: rand(-4, 4), sz: rand(-6, 6), bounces: 0,
-  });
+    sx: rand(-6, 6), sy: rand(-4, 4), sz: rand(-6, 6), bounces: 0, local: true, auth: isHost(),
+  };
+  flying.push(f);
+  if (G.mp) netSend('toss', { s: serItem(it), f: [f.x, f.y, f.z, f.vx, f.vy, f.vz, f.sx, f.sy, f.sz, p.yaw].map(v => +v.toFixed(3)) });
+}
+
+// бросок напарника: повторяем ту же траекторию
+export function remoteToss(s, f) {
+  const it = itemFromNet(s);
+  if (!it || !Array.isArray(f) || f.length < 10 || !f.every(Number.isFinite)) return;
+  if (it.placed) removeFromWorld(it);
+  if (it.mesh.parent) it.mesh.parent.remove(it.mesh);
+  it.mesh.scale.setScalar(1.4);
+  it.mesh.rotation.set(0, f[9], 0, 'YXZ');
+  it.mesh.position.set(f[0], f[1], f[2]);
+  scene.add(it.mesh);
+  flying.push({ it, x: f[0], y: f[1], z: f[2], vx: f[3], vy: f[4], vz: f[5], sx: f[6], sy: f[7], sz: f[8], bounces: 0, local: false, auth: isHost() });
 }
 
 function updateFlying(dt) {
@@ -409,16 +488,22 @@ function updateFlying(dt) {
     const floor = surfaceAt(f.x, f.z, bottom);
     if (f.y <= floor + 0.05 && f.vy < 0) {
       const speed = Math.hypot(f.vx, f.vy, f.vz);
-      sfx.impact(f.x, f.z, IMPACT[f.it.type] || 'plastic', speed);
+      // звук: свой бросок слышим сразу; чужой — хост проигрывает и пересылает
+      if (f.local || isHost()) {
+        const quiet = isClient() || !f.local;
+        if (quiet) G.noRelay++;
+        sfx.impact(f.x, f.z, IMPACT[f.it.type] || 'plastic', speed);
+        if (quiet) G.noRelay--;
+      }
       if (Math.abs(f.vy) > 1.5 && f.bounces < 2) {
         f.bounces++; f.y = floor + 0.05; f.vy = -f.vy * 0.3; f.vx *= 0.5; f.vz *= 0.5;
         f.sx *= 0.5; f.sz *= 0.5;
       } else {
         flying.splice(i, 1);
-        scene.remove(m);
         let x = f.x, z = f.z;
         if (floor === 0) { const r = collideCircle(f.x, f.z, 0.12); x = r.x; z = r.z; }
-        placeItem(f.it, x, z, m.rotation.y, true, floor);
+        if (f.auth) { scene.remove(m); placeItem(f.it, x, z, m.rotation.y, true, floor); }
+        else m.position.set(x, floor + 0.04, z); // клиент ждёт подтверждения хоста ('pl')
         continue;
       }
     }
@@ -428,7 +513,11 @@ function updateFlying(dt) {
 
 const box3 = new THREE.Box3();
 export function placeItem(it, x, z, yaw, lying = false, baseY = 0) {
+  for (let i = flying.length - 1; i >= 0; i--) if (flying[i].it === it) flying.splice(i, 1);
+  if (it.placed) removeFromWorld(it, true);
+  if (it.mesh.parent) it.mesh.parent.remove(it.mesh);
   it.placed = true;
+  it.yaw = yaw; it.lying = lying;
   it.x = x; it.z = z;
   it.room = roomAt(x, z);
   if (it.type === 'motion' || it.type === 'video' || it.type === 'laser') { it.on = true; }
@@ -449,7 +538,7 @@ export function placeItem(it, x, z, yaw, lying = false, baseY = 0) {
   m.scale.setScalar(it.type === 'video' ? 1 : 1.4);
   m.rotation.set(0, yaw, 0, 'YXZ');
   if (lying && ROLLS.has(it.type)) m.rotation.z = Math.PI / 2;
-  else if (lying) { m.rotation.x = rand(-0.05, 0.05); m.rotation.z = rand(-0.05, 0.05); }
+  else if (lying) { m.rotation.x = ((it.id * 37) % 10 - 5) / 100; m.rotation.z = ((it.id * 53) % 10 - 5) / 100; }
   m.position.set(x, 0, z);
   scene.add(m);
   m.updateMatrixWorld(true);
@@ -477,18 +566,30 @@ export function placeItem(it, x, z, yaw, lying = false, baseY = 0) {
   }
   G.placed.push(it);
   interactables.push(m);
-  if (G.ghost) G.ghost.onItemPlaced(it);
+  if (G.ghost && isHost()) G.ghost.onItemPlaced(it);
+  if (G.mp && isHost()) netSend('pl', { s: serItem(it), x, z, y: baseY, yaw, ly: lying ? 1 : 0 });
+}
+
+// убрать предмет из мира (без передачи в руки)
+export function removeFromWorld(it, quiet = false) {
+  const i = G.placed.indexOf(it); if (i >= 0) G.placed.splice(i, 1);
+  const ii = interactables.indexOf(it.mesh); if (ii >= 0) interactables.splice(ii, 1);
+  scene.remove(it.mesh);
+  if (it.data.tripod) scene.remove(it.data.tripod);
+  if (it.data.grid) scene.remove(it.data.grid);
+  if (!quiet) {
+    if (it.type === 'laser' || it.type === 'motion') it.on = false;
+    it.placed = false;
+    it.mesh.scale.setScalar(1);
+  }
 }
 
 export function pickup(it) {
   let slot = !G.inv[G.sel] ? G.sel : G.inv.findIndex(x => !x);
   if (slot < 0) { toast('Нет свободного слота'); return; }
-  G.placed.splice(G.placed.indexOf(it), 1);
-  const ii = interactables.indexOf(it.mesh); if (ii >= 0) interactables.splice(ii, 1);
-  scene.remove(it.mesh);
-  if (it.data.tripod) scene.remove(it.data.tripod);
-  if (it.data.grid) scene.remove(it.data.grid);
-  if (it.type === 'laser') it.on = false;
+  if (isClient()) { netSend('pick', { i: it.id }); return; }
+  removeFromWorld(it);
+  if (G.mp) netSend('pr', { i: it.id });
   if (it.type === 'recorder' && it.on && it.data.caught.length) {
     toast('🎙 На записи голоса: «' + it.data.caught.join('», «') + '»', 4);
     sfx.evp();
@@ -531,7 +632,8 @@ export function useSelected() {
       it.data.used = true; it.data.burnUntil = G.t + 6;
       it.data.tip.material.color.setHex(0xff7020);
       sfx.lighter();
-      if (G.ghost) G.ghost.onSmudge(p.x, p.z);
+      if (isClient()) netSend('smudge', { x: p.x, z: p.z });
+      else if (G.ghost) G.ghost.onSmudge(p.x, p.z);
       toast('Благовония зажжены');
       break;
     case 'salt': {
@@ -539,7 +641,8 @@ export function useSelected() {
       if (p.hidden) return;
       it.charges--;
       const { x, z } = placePos(0.6);
-      makeSaltPile(x, z);
+      if (isClient()) netSend('salt', { x, z });
+      else makeSaltPile(x, z);
       if (it.charges <= 0) { it.data.used = true; toast('Соль закончилась'); }
       break;
     }
@@ -551,15 +654,18 @@ export function useSelected() {
   }
 }
 
-function makeSaltPile(x, z) {
+export function makeSaltPile(x, z) {
   const geo = new THREE.ConeGeometry(0.16, 0.05, 7);
   const m = new THREE.Mesh(geo, mat(0xf4f4f8));
   m.position.set(x, 0.025, z);
   scene.add(m);
   saltPiles.push({ x, z, mesh: m, stepped: false });
+  if (G.mp && isHost()) netSend('salt', { x, z });
 }
 
 export function stepSalt(pile) {
+  if (pile.stepped) return;
+  if (G.mp && isHost()) netSend('saltStep', { i: saltPiles.indexOf(pile) });
   pile.stepped = true;
   pile.mesh.scale.set(1.5, 0.3, 1.1);
   pile.mesh.material = mat(0xb8b8b0);
@@ -575,7 +681,17 @@ export function addPrint(parent, x, y, z, rotY, foot = false, rotX = 0) {
   m.visible = false;
   parent.add(m);
   G.prints.push({ mesh: m, until: G.t + 120, foot });
+  if (G.mp && isHost()) netSend('print', { r: parent.userData.netRef || 'f', a: [x, y, z, rotY, rotX].map(v => +v.toFixed(3)), f: foot ? 1 : 0 });
   return m;
+}
+export function printFromNet(r, a, foot) {
+  if (!Array.isArray(a) || a.length < 5 || !a.every(Number.isFinite)) return;
+  let parent = scene;
+  if (typeof r === 'string' && r[0] === 'd') parent = (doors[+r.slice(1)] || {}).pivot || scene;
+  else if (typeof r === 'string' && r[0] === 's') parent = (switches[r.slice(1)] || {}).group || scene;
+  const m = addPrint(parent, a[0], a[1], a[2], a[3], !!foot, a[4]);
+  // повёрнутый отпечаток на обратной стороне двери
+  if (parent !== scene && a[2] < 0 && r[0] === 'd') m.rotation.y = Math.PI;
 }
 
 // ---------- распятие ----------
@@ -588,6 +704,7 @@ export function tryCrucifix(gx, gz, range) {
       const c = it.charges > 0 ? 0x6a5020 : 0x2a1a10;
       it.data.m1.material = mat(c); it.data.m2.material = mat(c);
       completeObjective('crucifix');
+      itemChanged(it);
       return true;
     }
   }
@@ -612,7 +729,25 @@ export function askSpiritBox() {
   setTimeout(() => {
     boxBusy = false;
     const gh = G.ghost;
+    if (isClient()) {
+      // ответ придёт от хоста (boxr) — см. boxAnswer()
+      pendingBox = q;
+      netSend('ask', { x: G.player.x, z: G.player.z });
+      return;
+    }
     const ans = gh && gh.spiritBoxAnswer(G.player.x, G.player.z);
+    showBoxAnswer(q, ans);
+  }, 1600);
+  if (G.ghost && isHost()) G.ghost.provoke();
+}
+let pendingBox = null;
+export function boxAnswer(ans) {
+  if (!pendingBox) return;
+  const q = pendingBox; pendingBox = null;
+  showBoxAnswer(q, ans);
+}
+function showBoxAnswer(q, ans) {
+  {
     if (ans) {
       const word = pick(q.a);
       G.boxText = '📻 ' + word.toUpperCase();
@@ -622,8 +757,7 @@ export function askSpiritBox() {
       G.boxText = '…ш-ш-ш…';
     }
     setTimeout(() => { if (G.boxText && !G.boxText.startsWith('«')) G.boxText = ''; }, 3500);
-  }, 1600);
-  if (G.ghost) G.ghost.provoke();
+  }
 }
 
 // ---------- показания и обновление ----------
@@ -666,6 +800,7 @@ export function nvHeldOn() {
   const it = selected();
   return !!(it && it.type === 'video' && it.on);
 }
+G.heldElectronicOn = () => heldElectronicOn();
 export function heldElectronicOn() {
   const it = selected();
   if (G.player.flashlight) return true;
@@ -744,8 +879,10 @@ export function updateItems(dt) {
       if (Math.hypot(p.x - pi.x, p.z - pi.z) < 0.9) trig = true;
       if (trig && G.t > cd) {
         motionCD.set(pi.id, G.t + 2.5);
-        sfx.motion(pi.x, pi.z);
-        if (byGhost) completeObjective('motion');
+        if (isHost()) {
+          sfx.motion(pi.x, pi.z);
+          if (byGhost) completeObjective('motion');
+        }
       }
       pi.data.led.material.color.setHex(G.t < cd ? 0xff2020 : 0x330000);
     } else if (pi.type === 'video') {
@@ -800,11 +937,13 @@ function updateNewEvidenceItems(dt) {
     if (!it) continue;
     const x = it.placed ? it.x : p.x, z = it.placed ? it.z : p.z;
     const d = gh ? Math.hypot(gh.x - x, gh.z - z) : 99;
+    // в мире решает хост, в руках — владелец
+    const auth = it.placed ? isHost() : true;
     if (it.type === 'candle') {
       const f = it.data.flame;
-      if (it.data.lit) {
+      if (it.data.lit && auth) {
         it.data.burn -= dt;
-        if (it.data.burn <= 0) { it.data.lit = false; it.data.burn = 0; }
+        if (it.data.burn <= 0) { it.data.lit = false; it.data.burn = 0; itemChanged(it); }
       }
       f.visible = !!it.data.lit;
       if (f.visible) {
@@ -815,12 +954,14 @@ function updateNewEvidenceItems(dt) {
       } else it.data.blue = false;
     } else if (it.type === 'recorder') {
       it.data.led.material.color.setHex(it.on && (G.t * 2 % 2 < 1.4) ? 0xff2020 : 0x330000);
-      if (it.on && G.t > (it.data.next || 0)) {
+      if (it.on && auth && G.t > (it.data.next || 0)) {
         it.data.next = G.t + 6;
         if (gh && gh.has('evp') && !gh.hunting && d < 6 && Math.random() < 0.35) {
           const w = EVP_WORDS[Math.floor(Math.random() * EVP_WORDS.length)];
+          if (!it.data.caught) it.data.caught = [];
           it.data.caught.push(w); it.data.catchT = G.t;
           if (it === held) { sfx.evp(); toast('🎙 Диктофон записал голос: «' + w + '»', 3); }
+          itemChanged(it);
         }
       }
     } else if (it.type === 'laser') {

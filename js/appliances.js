@@ -1,6 +1,6 @@
 // Бытовая техника, с которой взаимодействует призрак: телевизор и краны с водой
 import * as THREE from 'three';
-import { G } from './state.js';
+import { G, isClient, isHost, netSend } from './state.js';
 import { mat, box, interactables, roomAt } from './world.js';
 import { sfx } from './audio.js';
 
@@ -44,6 +44,12 @@ export function buildAppliances(scene) {
 }
 
 export function toggleAppliance(a, by = 'player') {
+  if (by === 'player' && isClient()) {
+    netSend('app', { i: appliances.indexOf(a) });
+    a.predUntil = performance.now() + 1200;
+    G.noRelay++; try { toggleAppliance(a, 'pred'); } finally { G.noRelay--; }
+    return;
+  }
   a.on = !a.on;
   if (a.kind === 'tap') { a.until = a.on ? G.t + (by === 'ghost' ? 20 : 999) : 0; sfx.click(a.x, a.z); }
   if (a.kind === 'tv') { sfx.click(a.x, a.z); if (!a.on) a.mesh.material.map = null, a.mesh.material.color.setHex(0x050505), a.mesh.material.needsUpdate = true; }
@@ -65,15 +71,15 @@ export function updateAppliances(dt) {
         a.tex.needsUpdate = true;
         if (a.mesh.material.map !== a.tex) { a.mesh.material.map = a.tex; a.mesh.material.color.setHex(0xffffff); a.mesh.material.needsUpdate = true; }
       }
-      if (G.t > a.nextSnd) { a.nextSnd = G.t + 1.4; sfx.tvStatic(a.x, a.z); }
+      if (G.t > a.nextSnd) { a.nextSnd = G.t + 1.4; if (isHost()) sfx.tvStatic(a.x, a.z); }
     }
     if (a.kind === 'tap') {
-      if (a.on && G.t > a.until) a.on = false;
+      if (a.on && isHost() && G.t > a.until) a.on = false;
       a.water.visible = a.on;
       a.handle.rotation.y = a.on ? 0.9 : 0;
       if (a.on) {
         a.water.scale.set(1 + Math.random() * 0.3, 1, 1 + Math.random() * 0.3);
-        if (G.t > a.nextSnd) { a.nextSnd = G.t + 0.9; sfx.water(a.x, a.z); }
+        if (G.t > a.nextSnd) { a.nextSnd = G.t + 0.9; if (isHost()) sfx.water(a.x, a.z); }
       }
     }
   }
@@ -81,4 +87,17 @@ export function updateAppliances(dt) {
 
 export function nearAppliances(x, z, r) {
   return appliances.filter(a => !a.on && Math.hypot(a.x - x, a.z - z) < r && roomAt(a.x, a.z) !== '.');
+}
+
+// сеть: включённые приборы битовой маской
+export function appliancesBits() { let b = 0; appliances.forEach((a, i) => { if (a.on) b |= 1 << i; }); return b; }
+export function applyAppliancesBits(b) {
+  const t = performance.now();
+  appliances.forEach((a, i) => {
+    const on = !!(b & (1 << i));
+    if (on !== a.on && !(a.predUntil > t)) {
+      a.on = on;
+      if (a.kind === 'tv' && !on) { a.mesh.material.map = null; a.mesh.material.color.setHex(0x050505); a.mesh.material.needsUpdate = true; }
+    }
+  });
 }

@@ -82,6 +82,61 @@ export function toast(msg, dur = 2.5) {
 export function completeObjective(id) {
   if (G.done[id]) return;
   G.done[id] = true;
+  if (G.mp) netSend('obj', { id });
   const o = G.objectives.find(o => o.id === id);
   if (o) toast('Задание выполнено: ' + o.text, 3);
+}
+
+// ---------- мультиплеер: общие помощники ----------
+// G.mp = null в одиночной игре; { role: 'host' | 'client' } в игре вдвоём
+G.mp = null;
+G.remote = null;          // состояние напарника (последнее полученное)
+G.itemsById = new Map();
+G.noRelay = 0;            // >0 — звуки не пересылаются напарнику
+export const isClient = () => !!(G.mp && G.mp.role === 'client');
+export const isHost = () => !G.mp || G.mp.role === 'host';
+export function netSend(type, data) { if (G.mp && G.mp.send) G.mp.send(type, data); }
+
+// игроки с точки зрения призрака (хост): локальный и, если есть, напарник
+export function playersList() {
+  const p = G.player;
+  const list = [{
+    id: 'L', local: true, x: p.x, z: p.z, room: p.room, inHouse: p.inHouse, dead: p.dead,
+    hidden: !!p.hidden, seenHiding: p.seenHiding, running: !!p.running,
+    elec: G.heldElectronicOn ? G.heldElectronicOn() : p.flashlight, sanity: G.sanity, yaw: p.yaw,
+    candle: G.inv.some(it => it && it.type === 'candle' && it.data.lit),
+  }];
+  const r = G.remote;
+  if (G.mp && r && r.ok) list.push({
+    id: 'R', local: false, x: r.x, z: r.z, room: r.room, inHouse: r.inHouse, dead: r.dead,
+    hidden: r.hid >= 0, seenHiding: !!r.sh, running: !!r.run, elec: !!r.el, sanity: r.san, yaw: r.yaw, candle: !!r.cl,
+  });
+  return list;
+}
+export function alivePlayers() { return playersList().filter(q => !q.dead); }
+export function nearestPlayer(x, z, filter = (q) => q.inHouse && !q.dead) {
+  let best = null, bd = 1e9;
+  for (const q of playersList()) { if (!filter(q)) continue; const d = Math.hypot(q.x - x, q.z - z); if (d < bd) { bd = d; best = q; } }
+  return best;
+}
+// средний рассудок живой команды
+export function teamSanity() {
+  const a = alivePlayers();
+  if (!a.length) return G.sanity;
+  return a.reduce((s, q) => s + (q.sanity ?? 100), 0) / a.length;
+}
+// изменить рассудок конкретного игрока ('L' — свой, 'R' — напарник)
+export function adjSanity(who, d) {
+  if (who === 'R') { netSend('san', { d }); return; }
+  G.sanity = clamp(G.sanity + d, 0, 100);
+}
+export function setSanity(who, v) {
+  if (who === 'R') { netSend('san', { v }); return; }
+  G.sanity = clamp(v, 0, 100);
+}
+// детерминированное перемешивание (одинаковое на всех устройствах при общем зерне)
+export function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
 }

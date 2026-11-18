@@ -640,3 +640,36 @@ export function speak(text) {
 
 // совместимость
 export function spatial(x, z) { return { vol: 1, pan: 0, d: Math.hypot(x - G.player.x, z - G.player.z) }; }
+
+// ---------- шаги напарника (объёмный звук) ----------
+sfx.remoteStep = (x, z, surface = 'wood', run = false) => {
+  if (!ctx) return;
+  const t = ctx.currentTime, d = route(x, z, 0.1, 0.6);
+  const v = (run ? 0.6 : 0.4) * rnd(0.8, 1.1);
+  if (surface === 'grass') nz(d, t, { buf: PINK, type: 'highpass', f: 1500, dur: 0.16, a: 0.03, vol: v });
+  else if (surface === 'tile') { osc(d, t, { f: rnd(170, 200), fEnd: 120, dur: 0.06, vol: v * 0.6 }); nz(d, t, { f: 2600, q: 1.5, dur: 0.05, vol: v * 0.8 }); }
+  else if (surface === 'metal') { osc(d, t, { type: 'triangle', f: 140, dur: 0.2, vol: v * 0.6 }); nz(d, t, { f: 1600, q: 7, dur: 0.18, vol: v * 0.5 }); }
+  else { osc(d, t, { f: rnd(90, 120), fEnd: 60, dur: 0.12, vol: v * 1.1 }); nz(d, t, { f: rnd(500, 800), q: 1.2, dur: 0.08, vol: v * 0.7 }); }
+};
+
+// ---------- мультиплеер: пересылка звуков, привязанных к месту ----------
+// Звук из этого списка, проигранный у одного игрока, отправляется напарнику (кроме случаев G.noRelay).
+const RELAY = new Set(['click', 'ghostStep', 'door', 'wardrobe', 'knock', 'impact', 'motion', 'whisper', 'breath', 'growl',
+  'sizzle', 'crackle', 'lightBuzz', 'singing', 'puff', 'rattle', 'tvStatic', 'water', 'musicBox', 'scrape', 'needle', 'evpWorld']);
+for (const k of Object.keys(sfx)) {
+  if (!RELAY.has(k)) continue;
+  const f = sfx[k];
+  sfx[k] = (...a) => {
+    f(...a);
+    if (G.mp && G.mp.send && !G.noRelay && a.length >= 2 && Number.isFinite(a[0])) {
+      G.mp.send('sx', [k, ...a.map(v => typeof v === 'number' ? +v.toFixed(2) : v)]);
+    }
+  };
+}
+// звук, пришедший от напарника
+export function playRelayed(arr) {
+  if (!Array.isArray(arr) || !RELAY.has(arr[0]) || typeof sfx[arr[0]] !== 'function') return;
+  const args = arr.slice(1, 6).filter(v => typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean');
+  G.noRelay++;
+  try { sfx[arr[0]](...args); } finally { G.noRelay--; }
+}

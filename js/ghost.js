@@ -1,6 +1,6 @@
 // Призраки: типы, поведение, охота
 import * as THREE from 'three';
-import { G, rand, randi, pick, clamp, completeObjective } from './state.js';
+import { G, rand, randi, pick, clamp, completeObjective, shuffle, playersList, nearestPlayer, teamSanity, adjSanity, netSend, toast } from './state.js';
 import {
   hideSpots, HOUSE_ROOMS, ROOMS, roomAt, findPath, randomCellIn, doors, switches, props,
   setLight, roomLit, segBlocked, frontDoor, fuseBox, mat, doorBetween,
@@ -226,7 +226,7 @@ export class Ghost {
 
   // применяется в начале расследования
   applyDifficulty(diff) {
-    const ev = [...this.def.ev].sort(() => Math.random() - 0.5);
+    const ev = shuffle(this.def.ev);
     this.hidden = ev.slice(0, 3 - diff.evidence);
     if (this.hidden.includes('orbs')) { for (const o of this.orbs) this.scene.remove(o); this.orbs = []; }
     if (this.hidden.includes('dots') && this.dots) { this.scene.remove(this.dots); this.dots = null; }
@@ -246,8 +246,9 @@ export class Ghost {
 
   huntThreshold() {
     let th = this.def.hunt;
-    if (this.m.lightsOff || this.m.darkSpeed) th = roomLit(G.player.room) ? 40 : 60;
-    if (this.m.lightHunt) th = roomLit(G.player.room) ? 60 : 35;
+    const np = nearestPlayer(this.x, this.z) || { room: G.player.room };
+    if (this.m.lightsOff || this.m.darkSpeed) th = roomLit(np.room) ? 40 : 60;
+    if (this.m.lightHunt) th = roomLit(np.room) ? 60 : 35;
     if (this.m.itemsAnger) th = Math.min(75, th + 5 * this.anger);
     return th;
   }
@@ -269,11 +270,12 @@ export class Ghost {
     }
     this.updateDots(dt);
     this.updateMist(dt);
+    if (this.hideAt && t > this.hideAt) { this.hideAt = 0; if (!this.hunting && !this.eventActive) this.mesh.visible = false; }
     if (this.huntPending && t > this.huntPending) {
       this.huntPending = 0;
-      if (!this.hunting && G.player.inHouse && !G.player.dead) this.startHunt();
+      if (!this.hunting && nearestPlayer(this.x, this.z)) this.startHunt();
     }
-    if (!this.roomChanged && G.sanity < 50 && Math.random() < dt * 0.004) this.changeRoom();
+    if (!this.roomChanged && teamSanity() < 50 && Math.random() < dt * 0.004) this.changeRoom();
     if (G.t > (this.actT || 0)) { this.actT = G.t + 5; G.activity.push(G.actNow); G.actNow = 0; if (G.activity.length > 36) G.activity.shift(); }
     if (this.hunting) { this.updateHunt(dt); return; }
     if (this.eventActive) { this.updateEvent(dt); return; }
@@ -286,14 +288,16 @@ export class Ghost {
     }
     if (t > this.tInteract) {
       this.interact();
-      const sanF = 1 + (100 - G.sanity) / 80;
-      const near = this.distTo(G.player.x, G.player.z) < 8 ? 1.3 : 1;
-      const out = G.player.inHouse ? 1 : 0.5;
+      const sanF = 1 + (100 - teamSanity()) / 80;
+      const np = nearestPlayer(this.x, this.z);
+      const near = np && this.distTo(np.x, np.z) < 8 ? 1.3 : 1;
+      const out = np ? 1 : 0.5;
       this.tInteract = t + rand(7, 15) / ((this.m.activity || 1) * sanF * near * out);
     }
     if (t > this.tEvent) {
       this.tEvent = t + rand(8, 16);
-      if (G.player.inHouse && !G.player.hidden && this.distTo(G.player.x, G.player.z) < 10 && Math.random() < 0.45 * (this.m.eventMul || 1)) this.startEvent();
+      const tg = nearestPlayer(this.x, this.z, q => q.inHouse && !q.dead && !q.hidden);
+      if (tg && this.distTo(tg.x, tg.z) < 10 && Math.random() < 0.45 * (this.m.eventMul || 1)) this.startEvent();
     }
     if (t > this.tHuntCheck) { this.tHuntCheck = t + 4; this.tryHunt(); }
   }
@@ -340,10 +344,10 @@ export class Ghost {
     else if (this.m.wander) room = Math.random() < 0.45 ? this.home : null;
     else if (this.m.water && Math.random() < 0.35) room = 'W';
     else if (here !== this.home) room = Math.random() < 0.8 ? this.home : null;
-    else room = Math.random() < 0.72 - (100 - G.sanity) / 300 ? this.home : null;
+    else room = Math.random() < 0.72 - (100 - teamSanity()) / 300 ? this.home : null;
     // при низком рассудке призрак всё чаще приходит туда, где игрок
-    const pr = G.player.room;
-    if (!this.m.homebody && G.player.inHouse && pr !== '.' && Math.random() < (G.sanity < 40 ? 0.3 : 0.06)) room = pr;
+    const inside = playersList().filter(q => q.inHouse && !q.dead);
+    if (!this.m.homebody && inside.length && Math.random() < (teamSanity() < 40 ? 0.3 : 0.06)) room = pick(inside).room;
     const [tx, tz] = randomCellIn(room);
     this.path = findPath(this.x, this.z, tx, tz);
     if (!this.path) this.pauseUntil = G.t + 2;
@@ -398,7 +402,7 @@ export class Ghost {
 
   // ---------- взаимодействия ----------
   interact() {
-    const p = G.player;
+    const p = nearestPlayer(this.x, this.z, q => !q.dead) || G.player;
     const pd = this.distTo(p.x, p.z);
     if (this.m.shy && pd < 4.5 && Math.random() < 0.65) return;
     const opts = [];
@@ -417,8 +421,11 @@ export class Ghost {
     opts.push(['sound', 1.5]);
     if (G.power) opts.push(['breaker', (this.m.breaker || 0.12)]);
     if (this.m.lightsOn && !G.power) opts.push(['breakerOn', 2]);
+    const lp = G.player;
     const candles = [...G.placed, ...G.inv.filter(Boolean)].filter(it => it.type === 'candle' && it.data.lit &&
-      this.distTo(it.placed ? it.x : p.x, it.placed ? it.z : p.z) < 3);
+      this.distTo(it.placed ? it.x : lp.x, it.placed ? it.z : lp.z) < 3);
+    const rq = playersList().find(q => !q.local && q.candle && !q.dead && this.distTo(q.x, q.z) < 3);
+    if (rq) candles.push({ remote: rq });
     if (candles.length) opts.push(['candle', 1.5]);
     const books = this.has('book') ? G.placed.filter(it => it.type === 'book' && !it.data.written && this.distTo(it.x, it.z) < 3.5) : [];
     if (books.length) opts.push(['book', 6]);
@@ -456,13 +463,13 @@ export class Ghost {
           const pr = nearProps[i];
           let ang = rand(0, Math.PI * 2);
           if (Math.random() < (this.m.throwAt ? 0.9 : 0.4)) ang = Math.atan2(p.x - pr.mesh.position.x, p.z - pr.mesh.position.z);
-          if (this.m.throwAt && pd < 4) G.sanity = Math.max(0, G.sanity - 3);
+          if (this.m.throwAt) for (const q of playersList()) if (!q.dead && this.distTo(q.x, q.z) < 4) adjSanity(q.id, -3);
           const sp = rand(2.5, 5);
           pr.vx = Math.sin(ang) * sp; pr.vz = Math.cos(ang) * sp; pr.vy = rand(1, 2.5); pr.rest = false;
           const px = pr.mesh.position.x, pz = pr.mesh.position.z;
           this.emf(px, pz, 3);
           this.sound(px, pz, 0.9);
-          if (this.m.multiThrow && pd < 5) G.sanity = Math.max(0, G.sanity - 2);
+          if (this.m.multiThrow) for (const q of playersList()) if (!q.dead && this.distTo(q.x, q.z) < 5) adjSanity(q.id, -2);
         }
         break;
       }
@@ -484,10 +491,12 @@ export class Ghost {
         break;
       case 'candle': {
         const c = pick(candles);
+        if (c.remote) { netSend('candleOut', {}); sfx.puff(c.remote.x, c.remote.z); this.emf(c.remote.x, c.remote.z, 2); break; }
         c.data.lit = false;
-        const cx = c.placed ? c.x : p.x, cz = c.placed ? c.z : p.z;
+        const cx = c.placed ? c.x : lp.x, cz = c.placed ? c.z : lp.z;
         sfx.puff(cx, cz);
         this.emf(cx, cz, 2);
+        if (G.itemChanged) G.itemChanged(c);
         break;
       }
       case 'appliance': {
@@ -500,6 +509,7 @@ export class Ghost {
       case 'book': {
         const it = pick(books);
         it.data.written = true; drawBook(it, true);
+        if (G.itemChanged) G.itemChanged(it);
         this.sound(it.x, it.z, 0.4);
         break;
       }
@@ -532,8 +542,10 @@ export class Ghost {
   }
 
   // ---------- явления ----------
-  startEvent(mode = null, dur = null) {
-    const p = G.player;
+  startEvent(mode = null, dur = null, target = null) {
+    const p = target || nearestPlayer(this.x, this.z, q => q.inHouse && !q.dead && !q.hidden) || nearestPlayer(this.x, this.z, q => !q.dead);
+    if (!p) return;
+    this.evTarget = p.id;
     if (segBlocked(this.x, this.z, p.x, p.z) || this.distTo(p.x, p.z) > 7) {
       // появиться рядом с игроком
       let found = false;
@@ -562,23 +574,27 @@ export class Ghost {
   }
 
   updateEvent(dt) {
-    const p = G.player;
+    const p = playersList().find(q => q.id === this.evTarget && !q.dead) || G.player;
+    const lp = G.player;
     this.yaw = Math.atan2(p.x - this.x, p.z - this.z);
     if (this.eventMode === 'mist') {
       const m = this.mist.position, d = Math.hypot(p.x - m.x, p.z - m.z);
       if (d > 0.5) { m.x += (p.x - m.x) / d * dt * 1.0; m.z += (p.z - m.z) / d * dt * 1.0; m.y = 1.3 + Math.sin(G.t * 3) * 0.1; }
-      else { sfx.whisper(p.x, p.z); G.sanity = Math.max(0, G.sanity - 8); this.endEvent(); return; }
+      else { sfx.whisper(p.x, p.z); adjSanity(p.id || 'L', -8); this.endEvent(); return; }
       this.x = m.x; this.z = m.z;
     }
     if (this.eventMode === 'walk') {
       const d = this.distTo(p.x, p.z);
       if (d > 0.8) { this.x += (p.x - this.x) / d * dt * 1.1; this.z += (p.z - this.z) / d * dt * 1.1; }
-      else { sfx.scream(); G.sanity = Math.max(0, G.sanity - 5); this.endEvent(); return; }
+      else {
+        if (p.id === 'R') netSend('scare', {}); else sfx.scream();
+        adjSanity(p.id || 'L', -5); this.endEvent(); return;
+      }
     }
     const left = this.eventUntil - G.t;
     if (this.eventMode !== 'mist') this.mesh.visible = left > 0.8 || Math.random() < 0.5;
-    G.flicker = this.distTo(p.x, p.z) < 8 ? 0.6 : 0;
-    if (!this.eventSeen && this.playerLooksAtMe()) {
+    G.flicker = this.distTo(lp.x, lp.z) < 8 ? 0.6 : 0;
+    if (!this.eventSeen && !lp.dead && this.playerLooksAtMe()) {
       this.eventSeen = true;
       G.sanity = Math.max(0, G.sanity - 10 * (this.m.eventDrain || 1));
       completeObjective('event');
@@ -611,16 +627,17 @@ export class Ghost {
   // ---------- охота ----------
   tryHunt() {
     if (this.hunting || this.eventActive || G.t < this.cooldownUntil || G.t < this.smudgeUntil) return;
-    if (!G.player.inHouse || G.player.dead) return;
+    if (!nearestPlayer(this.x, this.z)) return;  // в доме нет живых
     const th = this.huntThreshold();
-    if (G.sanity > th) return;
-    const chance = 0.2 + (th - G.sanity) / 100;
+    const san = teamSanity();
+    if (san > th) return;
+    const chance = 0.2 + (th - san) / 100;
     if (Math.random() > chance) return;
     if (this.huntPending) return;
     if (!this.m.noCrucifix && tryCrucifix(this.x, this.z, this.m.crucifix || 3)) { this.cooldownUntil = G.t + 20; return; }
     if (this.m.warnBreath) {
       // Лихо предупреждает тяжёлым дыханием рядом с жертвой
-      const p = G.player;
+      const p = nearestPlayer(this.x, this.z) || G.player;
       sfx.breath(p.x + rand(-1.5, 1.5), p.z + rand(-1.5, 1.5));
       setTimeout(() => sfx.breath(p.x, p.z), 1800);
       this.huntPending = G.t + 4.5;
@@ -657,41 +674,53 @@ export class Ghost {
     this.cooldownUntil = G.t + (this.m.cooldown || 25);
     G.flicker = 0;
     this.path = null; this.pauseUntil = G.t + 2;
-    if (!G.player.dead) completeObjective('survive');
+    if (playersList().some(q => !q.dead)) completeObjective('survive');
   }
 
   updateHunt(dt) {
-    const p = G.player, t = G.t;
-    const d = this.distTo(p.x, p.z);
+    const t = G.t;
     const blind = t < this.blindUntil;
-    let sees = false, detect = false, elec = false;
-    if (!blind && p.inHouse && !p.dead) {
-      sees = !p.hidden && d < 20 && !segBlocked(this.x, this.z, p.x, p.z);
-      if (this.m.seeThrough && d < 4.5) { detect = true; this.lastKnown = { x: p.x, z: p.z }; }
-      elec = heldElectronicOn() && d < (this.m.elecRange || 7.5);
-      if (p.running && d < 9) { detect = true; this.lastKnown = { x: p.x, z: p.z }; }
-      detect = detect || sees || elec;
+    // кого призрак видит, слышит или чувствует
+    const ps = playersList().filter(q => q.inHouse && !q.dead);
+    let best = null, bestD = 1e9, anySees = false;
+    for (const q of ps) {
+      const d = this.distTo(q.x, q.z);
+      q._d = d; q._sees = false; q._elec = false;
+      if (blind) continue;
+      let det = false;
+      q._sees = !q.hidden && d < 20 && !segBlocked(this.x, this.z, q.x, q.z);
+      q._elec = q.elec && d < (this.m.elecRange || 7.5);
+      if (this.m.seeThrough && d < 4.5) det = true;
+      if (q.running && d < 9) det = true;
+      det = det || q._sees || q._elec;
+      if (q._sees) anySees = true;
+      if (det && d < bestD) { best = q; bestD = d; }
     }
-    this.losTime = sees ? this.losTime + dt : Math.max(0, this.losTime - dt * 2);
-    if (detect) {
-      this.lastKnown = { x: p.x, z: p.z };
-      this.knowsHidden = !!p.hidden && (p.seenHiding || elec || (this.m.seeThrough && d < 4.5));
+    if (!this.knows) this.knows = {};
+    if (best) {
+      this.lastKnown = { x: best.x, z: best.z };
+      this.targetId = best.id;
+      this.knows[best.id] = best.hidden && (best.seenHiding || best._elec || (this.m.seeThrough && bestD < 4.5));
     }
+    const sees = !!(best && best._sees);
+    const tgt = best || ps.reduce((a, q) => (!a || q._d < a._d ? q : a), null);
+    const d = tgt ? tgt._d : 99;
+    this.losTime = anySees ? this.losTime + dt : Math.max(0, this.losTime - dt * 2);
     // Анчутка: прыжок ближе к жертве
     this.unseenT = sees ? 0 : (this.unseenT || 0) + dt;
-    if (this.m.teleport && !this.teleported && this.unseenT > 5 && p.inHouse && !p.dead && t > this.graceUntil) {
+    if (this.m.teleport && !this.teleported && this.unseenT > 5 && tgt && t > this.graceUntil) {
       for (let i = 0; i < 20; i++) {
         const a = rand(0, Math.PI * 2), r = rand(4, 6);
-        const x = p.x + Math.sin(a) * r, z = p.z + Math.cos(a) * r;
-        if (roomAt(x, z) === '.' || segBlocked(p.x, p.z, x, z) === false) continue;
+        const x = tgt.x + Math.sin(a) * r, z = tgt.z + Math.cos(a) * r;
+        if (roomAt(x, z) === '.' || segBlocked(tgt.x, tgt.z, x, z) === false) continue;
         this.x = x; this.z = z; this.teleported = true; this.path = null;
-        this.lastKnown = { x: p.x, z: p.z };
+        this.lastKnown = { x: tgt.x, z: tgt.z };
         sfx.whisper(x, z);
         break;
       }
     }
     this.repathT -= dt;
-    if (sees) this.path = [[p.x, p.z]];
+    if (sees) this.path = [[best.x, best.z]];
     else if (this.repathT <= 0 || !this.path || !this.path.length) {
       this.repathT = 0.5;
       if (this.lastKnown) {
@@ -727,9 +756,11 @@ export class Ghost {
     }
     if (t > this.searchPause) this.moveAlong(dt, speed, 1.0);
 
-    // поимка
-    if (t > this.graceUntil && d < 0.75 && p.inHouse && !p.dead) {
-      if (!p.hidden || this.knowsHidden) { this.kill(); return; }
+    // поимка: любого игрока рядом (спрятавшегося — только если призрак знает, где он)
+    if (t > this.graceUntil) {
+      for (const q of ps) {
+        if (this.distTo(q.x, q.z) < 0.75 && (!q.hidden || this.knows[q.id])) { this.kill(q); return; }
+      }
     }
     // мерцание видимости
     this.blinkT -= dt;
@@ -737,23 +768,115 @@ export class Ghost {
       this.mesh.visible = !this.mesh.visible;
       this.blinkT = this.mesh.visible ? rand(0.25, 0.8) : (this.m.blinkOff ? rand(0.4, 1.0) : rand(0.08, 0.35));
     }
-    G.flicker = d < 10 ? 1 : 0;
-    setHuntIntensity(clamp(1 - d / 15, 0, 1));
+    const lp = G.player, ld = this.distTo(lp.x, lp.z);
+    G.flicker = ld < 10 ? 1 : 0;
+    setHuntIntensity(clamp(1 - ld / 15, 0, 1));
     if (t > this.huntEnd) this.endHunt();
   }
 
-  kill() {
+  kill(q = null) {
     const p = G.player;
-    p.dead = true;
+    const local = !q || q.local;
+    const vx = local ? p.x : q.x, vz = local ? p.z : q.z, vyaw = local ? p.yaw : (q.yaw || 0);
+    // призрак встаёт прямо перед жертвой и остаётся видимым 3 секунды
+    const fx = -Math.sin(vyaw), fz = -Math.cos(vyaw);
+    this.x = vx + fx * 0.7; this.z = vz + fz * 0.7;
+    this.yaw = Math.atan2(vx - this.x, vz - this.z);
     this.mesh.visible = true;
-    // встать прямо перед игроком
-    const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
-    this.x = p.x + fx * 0.7; this.z = p.z + fz * 0.7;
-    this.yaw = Math.atan2(p.x - this.x, p.z - this.z);
+    this.hideAt = G.t + 3; this.pauseUntil = G.t + 3.5; this.path = null;
     this.hunting = false;
+    frontDoor.locked = false;
+    this.cooldownUntil = G.t + (this.m.cooldown || 25);
     setHuntAudio(false);
-    sfx.scream();
-    try { navigator.vibrate && navigator.vibrate(700); } catch (_) { /* */ }
-    if (G.onDeath) G.onDeath();
+    if (local) {
+      p.dead = true;
+      sfx.scream();
+      try { navigator.vibrate && navigator.vibrate(700); } catch (_) { /* */ }
+      if (G.onDeath) G.onDeath();
+    } else {
+      netSend('kill', {});
+      if (G.remote) G.remote.dead = true;
+      toast('Призрак настиг напарника!', 4);
+    }
+  }
+
+  // ---------- сеть: хост отправляет состояние призрака ----------
+  netState() {
+    const f = (this.mesh.visible ? 1 : 0) | (this.hunting ? 2 : 0) | (this.eventActive ? 4 : 0) |
+      (this.dots && this.dots.visible ? 8 : 0) | (this.mist.visible ? 16 : 0) | (this.eventActive && this.eventMode === 'shadow' ? 32 : 0);
+    const m = this.mist.position;
+    return [+this.x.toFixed(2), +this.z.toFixed(2), +this.yaw.toFixed(2), f, +m.x.toFixed(2), +m.y.toFixed(2), +m.z.toFixed(2), HOUSE_ROOMS.indexOf(this.home)];
+  }
+
+  // ---------- клиент: призрак повторяет снимки хоста ----------
+  netApply(g, at) {
+    if (!Array.isArray(g) || g.length < 8 || !g.every(Number.isFinite)) return;
+    if (!this.buf) this.buf = [];
+    this.buf.push({ at, x: g[0], z: g[1], yaw: g[2], f: g[3], mx: g[4], my: g[5], mz: g[6] });
+    if (this.buf.length > 30) this.buf.shift();
+    const home = HOUSE_ROOMS[g[7]];
+    if (home && home !== this.home) {
+      this.home = home;
+      for (const o of this.orbs) { const [x, z] = randomCellIn(this.home); o.userData.bx = x; o.userData.bz = z; }
+    }
+  }
+
+  netUpdate(dt, renderAt) {
+    const b = this.buf;
+    if (!b || !b.length) { this.animate(dt); return; }
+    // интерполяция между двумя снимками вокруг момента renderAt
+    let a = b[0], c = b[b.length - 1];
+    for (let i = 0; i < b.length - 1; i++) if (b[i].at <= renderAt && b[i + 1].at >= renderAt) { a = b[i]; c = b[i + 1]; break; }
+    if (renderAt >= c.at) a = c;
+    const k = c.at > a.at ? clamp((renderAt - a.at) / (c.at - a.at), 0, 1) : 1;
+    const jump = Math.hypot(c.x - a.x, c.z - a.z) > 2.5;   // телепорт — без размазывания
+    const s = jump ? (k < 0.5 ? a : c) : null;
+    this.x = s ? s.x : a.x + (c.x - a.x) * k;
+    this.z = s ? s.z : a.z + (c.z - a.z) * k;
+    let dy = c.yaw - a.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+    this.yaw = a.yaw + dy * k;
+    const f = (k < 0.5 ? a : c).f;
+    const wasHunt = this.hunting, wasEvent = this.eventActive;
+    this.mesh.visible = !!(f & 1);
+    this.hunting = !!(f & 2);
+    this.eventActive = !!(f & 4);
+    if (this.dots) { this.dots.visible = !!(f & 8) && Math.random() > 0.15; this.dots.position.set(this.x, 0, this.z); this.dots.rotation.y = this.yaw; }
+    this.mist.visible = !!(f & 16);
+    if (this.mist.visible) this.mist.position.set(a.mx + (c.mx - a.mx) * k, a.my + (c.my - a.my) * k, a.mz + (c.mz - a.mz) * k);
+    const shadow = !!(f & 32);
+    if (shadow !== this._shadow) {
+      this._shadow = shadow;
+      if (shadow) this.mesh.userData.mats.forEach(m => { m.opacity = 0.97; m.emissive.setHex(0x000000); });
+      else { this.mesh.userData.mats[0].opacity = 0.88; this.mesh.userData.mats[1].opacity = 0.9; this.mesh.userData.mats[0].emissive.setHex(0x0c0f13); this.mesh.userData.mats[1].emissive.setHex(0x1a1d22); }
+    }
+    // охота у клиента: звук, вибрация, мерцание — по своему расстоянию
+    const lp = G.player, ld = this.distTo(lp.x, lp.z);
+    if (this.hunting && !wasHunt) {
+      setHuntAudio(true);
+      try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (_) { /* */ }
+      if (G.hint) G.hint('hunt', 'ОХОТА! Спрячьтесь в шкаф или за закрытой дверью. Выключите фонарь и электронику, не бегайте рядом с призраком.');
+    }
+    if (!this.hunting && wasHunt) setHuntAudio(false);
+    if (this.hunting) setHuntIntensity(clamp(1 - ld / 15, 0, 1));
+    G.flicker = this.hunting ? (ld < 10 ? 1 : 0) : this.eventActive ? (ld < 8 ? 0.6 : 0) : 0;
+    // своё явление: увидел — теряешь рассудок
+    if (!this.eventActive) this._seenLocal = false;
+    else if (!wasEvent) this._seenLocal = false;
+    if (this.eventActive && this.mesh.visible && !this._seenLocal && !lp.dead && this.playerLooksAtMe()) {
+      this._seenLocal = true;
+      G.sanity = Math.max(0, G.sanity - 10 * (this.m.eventDrain || 1));
+      completeObjective('event');
+    }
+    this.updateMist(dt);
+    this.animate(dt);
+    const t = G.t;
+    for (const o of this.orbs) {
+      const u = o.userData;
+      o.position.set(u.bx + Math.sin(t * 0.3 + u.ph) * 0.8, u.by + Math.sin(t * 0.7 + u.ph) * 0.3, u.bz + Math.cos(t * 0.25 + u.ph) * 0.8);
+    }
+  }
+
+  dispose() {
+    for (const o of [this.mesh, this.mist, this.dots, ...this.orbs]) if (o && o.parent) o.parent.remove(o);
   }
 }

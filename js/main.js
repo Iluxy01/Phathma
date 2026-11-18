@@ -1,6 +1,7 @@
 // Точка входа: рендер, управление, игровой цикл
 import * as THREE from 'three';
-import { G, rand, clamp, toast, pick, DIFFS } from './state.js';
+import { G, rand, clamp, toast, pick, DIFFS, isHost, isClient, netSend, shuffle } from './state.js';
+import * as MP from './mp.js';
 import * as AP from './appliances.js';
 import * as W from './world.js';
 import { initAudio, sfx, setWindIndoor, suspendAudio, setStatic, setHuntAudio, updateAudio } from './audio.js';
@@ -43,15 +44,19 @@ camera.add(uvLight, uvLight.target);
 const photoLight = new THREE.PointLight(0xffffff, 0, 12, 1.2);
 camera.add(photoLight);
 
-W.buildWorld(scene);
-I.initItems(scene, camera, W.van.rackSlots);
-AP.buildAppliances(scene);
+// Общее «зерно» случайности: у всех игроков дом, мебель и предметы получаются одинаковыми.
+function mulberry32(a) {
+  return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const nativeRandom = Math.random;
+function withSeed(seed, fn) { Math.random = mulberry32(seed); try { return fn(); } finally { Math.random = nativeRandom; } }
 
-// случайный призрак
-const forced = new URLSearchParams(location.search).get('ghost');
-const def = GHOSTS.find(g => g.id === forced) || pick(GHOSTS);
-G.ghost = new Ghost(scene, def);
-CU.spawnCursed(scene, new URLSearchParams(location.search).get('cursed'));
+withSeed(1337, () => {
+  W.buildWorld(scene);
+  I.initItems(scene, camera, W.van.rackSlots);
+  AP.buildAppliances(scene);
+});
+const urlq = new URLSearchParams(location.search);
 
 // дополнительные задания
 const OBJ = [
@@ -65,7 +70,18 @@ const OBJ = [
   { id: 'survive', text: 'Пережить охоту' },
   { id: 'cursed', text: 'Воспользоваться проклятым предметом' },
 ];
-G.objectives = OBJ.sort(() => Math.random() - 0.5).slice(0, 3);
+
+// дело: призрак, проклятый предмет, задания, сложность — из зерна (у обоих игроков одинаково)
+function setupCase(seed, diffKey, forcedGhost, forcedCursed) {
+  G.diffKey = DIFFS[diffKey] ? diffKey : 'inter';
+  withSeed(seed, () => {
+    const def = GHOSTS.find(g => g.id === forcedGhost) || pick(GHOSTS);
+    G.ghost = new Ghost(scene, def);
+    CU.spawnCursed(scene, forcedCursed);
+    G.objectives = shuffle(OBJ).slice(0, 3);
+    applyDifficulty();
+  });
+}
 
 // монитор фургона
 const rt = new THREE.WebGLRenderTarget(256, 160);
@@ -205,6 +221,13 @@ let target = null;
 
 function findTarget() {
   const p = G.player;
+  if (p.dead) {
+    // наблюдатель может только уехать на фургоне
+    if (!p.inVan) return null;
+    ray.setFromCamera(center, camera);
+    const h = ray.intersectObjects(W.interactables, true).find(h => { let o = h.object; while (o && !o.userData.kind) o = o.parent; return o && o.userData.kind === 'leave'; });
+    return h ? { kind: 'leave', label: 'Завершить расследование' } : null;
+  }
   if (p.hidden) return { kind: 'unhide', label: 'Выйти из шкафа' };
   if (CU.mirrorActive()) return { kind: 'cursed', label: CU.cursedPrompt() };
   ray.setFromCamera(center, camera);
@@ -240,7 +263,7 @@ function findTarget() {
 
 function interact() {
   const p = G.player;
-  if (!G.running || p.dead) return;
+  if (!G.running) return;
   const t = findTarget();
   if (!t) return;
   switch (t.kind) {
@@ -251,17 +274,18 @@ function interact() {
       break;
     case 'door':
       if (t.door.locked) { toast('Дверь заперта!'); sfx.knock(t.door.cx, t.door.cz); return; }
-      t.door.target = t.door.angle > 0.5 ? 0 : 1.45;
-      sfx.door(t.door.cx, t.door.cz, t.door.target === 0 && t.door.angle > 1);
+      if (isClient()) { netSend('door', { i: W.doors.indexOf(t.door) }); t.door.predUntil = performance.now() + 1200; G.noRelay++; toggleDoor(t.door); G.noRelay--; return; }
+      toggleDoor(t.door);
       break;
     case 'switch':
-      W.setLight(t.room, !G.lightsOn[t.room]);
-      sfx.click();
       if (!G.power) toast('Нет электричества — проверьте щиток');
+      if (isClient()) { netSend('sw', { r: t.room }); W.predLight[t.room] = performance.now() + 1200; W.setLight(t.room, !G.lightsOn[t.room]); sfx.click(); return; }
+      toggleSwitch(t.room);
       break;
     case 'fuse':
       if (!G.power && G.ghost.hunting) { toast('Щиток не включается!'); return; }
-      G.power = !G.power; sfx.breaker(G.power);
+      if (isClient()) { netSend('fuse', {}); G.predPower = performance.now() + 1200; G.power = !G.power; sfx.breaker(G.power); return; }
+      toggleFuse();
       break;
     case 'hide': {
       const gh = G.ghost;
@@ -287,11 +311,29 @@ function interact() {
   }
 }
 
+function toggleDoor(d) {
+  if (!d || d.locked) return;
+  d.target = d.angle > 0.5 ? 0 : 1.45;
+  sfx.door(d.cx, d.cz, d.target === 0 && d.angle > 1);
+}
+function toggleSwitch(r, remote = false) {
+  if (!W.switches[r]) return;
+  W.setLight(r, !G.lightsOn[r]);
+  const sw = W.switches[r];
+  if (remote) { sfx.click(sw.x, sw.z); return; }   // нажавший уже услышал щелчок у себя
+  G.noRelay++; sfx.click(); G.noRelay--;
+  if (G.mp) netSend('sx', ['click', +sw.x.toFixed(2), +sw.z.toFixed(2)]);
+}
+function toggleFuse() {
+  if (!G.power && G.ghost.hunting) return;
+  G.power = !G.power; sfx.breaker(G.power);
+}
+
 // ---------- игрок ----------
 let stepAcc = 0, lastIndoor = null;
 function updatePlayer(dt) {
   const p = G.player;
-  if (p.dead) return;
+  if (p.dead && !G.spectating) return;
   let mx = input.mx, mz = input.mz;
   const k = input.keys;
   if (k.KeyW || k.ArrowUp) mz += 1;
@@ -322,7 +364,7 @@ function updatePlayer(dt) {
     p.x = r.x; p.z = r.z;
     p.bob += moved * 5.5;
     stepAcc += moved;
-    if (stepAcc > (speed > 2 ? 0.75 : 0.6)) {
+    if (stepAcc > (speed > 2 ? 0.75 : 0.6) && !p.dead) {
       stepAcc = 0;
       const r = W.roomAt(p.x, p.z);
       sfx.step(W.inVanArea(p.x, p.z) ? 'metal' : r === '.' ? 'grass' : (r === 'K' || r === 'W') ? 'tile' : 'wood', speed > 2);
@@ -338,7 +380,7 @@ function updatePlayer(dt) {
 const _dv = new THREE.Vector3(), _dm = new THREE.Matrix4(), _dq = new THREE.Quaternion();
 function updateCamera(dt) {
   const p = G.player;
-  if (p.dead) {
+  if (p.dead && !G.spectating) {
     const gh = G.ghost;
     _dv.set(gh.x, 1.55, gh.z);
     _dm.lookAt(camera.position, _dv, camera.up);
@@ -525,14 +567,29 @@ G.onDeath = () => {
   $('death').classList.add('on');
   setStatic(false);
 };
+function startSpectate() {
+  G.spectating = true;
+  $('death').classList.remove('on');
+  document.body.classList.add('spectating');
+  camera.position.y = 1.6;
+  for (let i = 0; i < 3; i++) if (G.inv[i]) { I.selectSlot(i); I.dropSelected(); }
+  toast('Вы погибли. Можно бродить и наблюдать за напарником. Призрак вас не видит.', 6);
+}
 function leave() {
+  if (G.mp) { MP.requestEnd(); return; }
+  endGame();
+}
+function endGame(note = '') {
+  if (G.over) return;
   G.running = false; G.over = true;
   setStatic(false); setHuntAudio(false);
-  UI.showResult(false);
+  document.body.classList.remove('spectating');
+  UI.showResult(G.player.dead, note);
 }
 
 function pause() {
   if (!G.running) return;
+  if (G.mp) { UI.openScreen('pause'); return; }   // напарник продолжает играть
   G.paused = true; UI.openScreen('pause'); suspendAudio(true);
 }
 function resume() {
@@ -541,6 +598,7 @@ function resume() {
 }
 
 UI.initUI({ pause, resume, leave });
+MP.init({ scene, camera, startGame, endGame, toggleDoor, toggleSwitch, toggleFuse, goFullscreen, stepGame });
 
 // ---------- старт ----------
 $('sens').value = G.settings.sens;
@@ -578,23 +636,33 @@ function applyDifficulty() {
   G.ghost.applyDifficulty(D);
 }
 
-$('btnStart').addEventListener('click', () => {
-  initAudio();
-  applyDifficulty();
-  UI.hide('menu');
-  UI.show('hud');
-  G.running = true;
-  G.player.flashlight = true;
+function goFullscreen() {
   try {
     const el = document.documentElement;
     if (el.requestFullscreen && matchMedia('(pointer: coarse)').matches) el.requestFullscreen().then(() => screen.orientation?.lock?.('landscape').catch(() => {})).catch(() => {});
   } catch (_) { /* */ }
+}
+// opts: { seed, diffKey, role: null | 'host' | 'client' }
+function startGame(opts) {
+  if (G.running) return;
+  initAudio();
+  setupCase(opts.seed, opts.diffKey, opts.role ? null : urlq.get('ghost'), opts.role ? null : urlq.get('cursed'));
+  if (opts.role) MP.onGameStart(opts.role);
+  UI.hide('menu'); UI.hide('mpScreen');
+  UI.show('hud');
+  G.running = true;
+  G.player.flashlight = true;
+  if (opts.role === 'client') { G.player.x = 8.9; G.player.z = 18.2; }
   toast('Возьмите снаряжение со стеллажа слева. «Положить» в фургоне — вернуть на место', 5);
   if (!G.power) setTimeout(() => toast('В доме выбит щиток — он в кладовке рядом с гостиной', 5), 5500);
   drawCase();
   last = performance.now();
+}
+$('btnStart').addEventListener('click', () => {
+  goFullscreen();
+  startGame({ seed: (Math.random() * 2 ** 31) | 0, diffKey: G.diffKey, role: null });
 });
-document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && !G.mp) pause(); });
 
 initScreen(() => {
   G.needRender = true;
@@ -645,17 +713,22 @@ function frame(now) {
 function stepGame(dt) {
   if (G.running && !G.paused) {
     G.t += dt;
+    if (isClient()) MP.syncTime();
     updatePlayer(dt);
-    if (deathT < 0) {
-      G.ghost.update(dt);
-      updateSanity(dt);
-    } else {
+    if (isClient()) { G.ghost.netUpdate(dt, MP.renderAt()); W.smoothProps(dt); }
+    else if (deathT < 0 || G.mp) G.ghost.update(dt);
+    else G.ghost.animate(dt);
+    if (deathT < 0) updateSanity(dt);
+    else if (!G.spectating) {
       deathT += dt;
-      G.ghost.animate(dt);
-      if (deathT > 3) { G.running = false; UI.showResult(true); }
+      if (deathT > 3) {
+        if (G.mp && MP.partnerAlive()) startSpectate();
+        else if (G.mp) MP.allDead();
+        else endGame();
+      }
     }
     W.updateDoors(dt);
-    W.updateProps(dt);
+    if (isHost()) W.updateProps(dt);
     W.updateLights(G.t);
     I.updateItems(dt);
     CU.updateCursed(dt);
@@ -677,7 +750,8 @@ function stepGame(dt) {
     boardT -= dt;
     if (boardT <= 0 && G.player.inVan) { boardT = 1; W.drawSanityBoard(); }
     // старые события
-    G.emfSources = G.emfSources.filter(s => s.until > G.t);
+    if (isHost()) G.emfSources = G.emfSources.filter(s => s.until > G.t);
+    if (G.mp) MP.update(dt);
   }
 }
 function renderFrame(dt) {

@@ -1,7 +1,7 @@
 // Проклятые предметы: в каждом доме лежит один. Дают сведения о призраке, но забирают рассудок
 // и могут вызвать «проклятую» охоту, которую не остановить распятием.
 import * as THREE from 'three';
-import { G, rand, pick, toast, completeObjective, EVIDENCE } from './state.js';
+import { G, rand, pick, toast, completeObjective, EVIDENCE, isClient, isHost, netSend, adjSanity, setSanity, playersList } from './state.js';
 import { ROOMS, mat, box, interactables } from './world.js';
 import { sfx } from './audio.js';
 
@@ -153,49 +153,90 @@ export function cursedPrompt() {
 }
 export function mirrorActive() { return !!C.mirrorOn; }
 
+// игрок нажал на проклятый предмет
 export function useCursed() {
   if (C.broken) { toast('Предмет больше не действует'); return; }
   completeObjective('cursed');
+  if (C.type === 'board') { openBoard(); return; }
+  if (C.type === 'mirror') {
+    C.mirrorOn = !C.mirrorOn;
+    document.body.classList.toggle('mirroring', C.mirrorOn);
+    sfx.whoosh();
+    return;
+  }
+  if (isClient()) netSend('cur', { a: 'use' });
+  else hostUse('L');
+}
+
+// ---------- хост: применение действий (actor: 'L' — сам хост, 'R' — напарник) ----------
+function notify(actor, text, dur = 3) { if (actor === 'R') netSend('toast', { t: text, d: dur }); else toast(text, dur); }
+function actorPlayer(actor) { return playersList().find(q => q.id === actor) || null; }
+function actorSanity(actor) { const q = actorPlayer(actor); return q ? q.sanity ?? 100 : G.sanity; }
+
+export function hostUse(actor) {
+  if (C.broken) return;
   const gh = G.ghost;
   switch (C.type) {
-    case 'board': openBoard(); break;
     case 'musicbox': {
       if (C.playing) return;
       C.playing = true; C.playEnd = G.t + 9;
       sfx.musicBox(C.x, C.z, 9);
-      if (gh.distTo(C.x, C.z) < 10 && !gh.hunting) setTimeout(() => { if (!gh.hunting) gh.startEvent('walk', 8); }, 2500);
+      if (gh.distTo(C.x, C.z) < 10 && !gh.hunting) setTimeout(() => { if (!gh.hunting) gh.startEvent('walk', 8, actorPlayer(actor)); }, 2500);
       break;
     }
-    case 'cards': drawCard(); break;
-    case 'mirror':
-      C.mirrorOn = !C.mirrorOn;
-      document.body.classList.toggle('mirroring', C.mirrorOn);
-      sfx.whoosh();
-      break;
+    case 'cards': drawCard(actor); break;
     case 'doll': {
+      if (C.pinsLeft <= 0) return;
       C.pinsLeft--;
-      const pin = C.pins[C.pinsLeft];
-      pin.position.y = 0.035;
+      applyPins();
       sfx.needle(C.x, C.z);
       if (Math.random() < 0.1 || C.pinsLeft === 0) {
-        G.sanity = Math.max(0, G.sanity - 10);
-        toast('Игла вошла прямо в сердце куклы…', 3);
+        adjSanity(actor, -10);
+        notify(actor, 'Игла вошла прямо в сердце куклы…');
         curse();
       } else {
-        G.sanity = Math.max(0, G.sanity - 5);
+        adjSanity(actor, -5);
         gh.interact(); gh.provoke();
       }
       break;
     }
   }
+  syncCursed();
 }
+
+export function hostCurse() { if (!C.broken) { curse(); syncCursed(); } }
 
 function curse() {
   C.broken = true;
   C.mirrorOn = false;
+  C.curseN = (C.curseN || 0) + 1;
   document.body.classList.remove('mirroring');
   sfx.curse();
-  G.ghost.startHunt(true);
+  if (isHost()) G.ghost.startHunt(true);
+}
+
+// ---------- сеть: состояние предмета ----------
+function applyPins() {
+  if (!C.pins) return;
+  C.pins.forEach((pin, i) => { pin.position.y = i >= C.pinsLeft ? 0.035 : 0.06; });
+}
+function applyDeck() {
+  if (!C.deck) return;
+  C.deck.scale.y = Math.max(0.1, C.cardsLeft / 10);
+  C.deck.position.y = 0.0125 * C.deck.scale.y;
+  C.deck.visible = C.cardsLeft > 0;
+}
+export function syncCursed() {
+  if (!G.mp || !isHost()) return;
+  netSend('cs', { b: C.broken ? 1 : 0, cl: C.cardsLeft ?? 0, pl: C.pinsLeft ?? 0, py: C.playing ? 1 : 0, pe: +(C.playEnd || 0).toFixed(1), mv: +(C.moveUntil || 0).toFixed(1), cn: C.curseN || 0 });
+}
+export function applyCursedState(st) {
+  if (!st || !C.type) return;
+  C.broken = !!st.b;
+  if (Number.isFinite(st.cl)) { C.cardsLeft = st.cl; applyDeck(); }
+  if (Number.isFinite(st.pl)) { C.pinsLeft = st.pl; applyPins(); }
+  C.playing = !!st.py; C.playEnd = st.pe || 0; C.moveUntil = st.mv || 0;
+  if ((st.cn || 0) > (C.curseN || 0)) { C.curseN = st.cn; sfx.curse(); C.mirrorOn = false; document.body.classList.remove('mirroring'); }
 }
 
 // ---------- говорящая доска ----------
@@ -204,7 +245,7 @@ const QUESTIONS = [
   { q: 'Сколько тебе лет?', cost: 5, a: (g) => String(g.age) },
   { q: 'Как тебя зовут?', cost: 5, a: (g) => g.fullName.split(' ')[0].toUpperCase() },
   { q: 'Ты здесь?', cost: 5, a: () => 'ДА' },
-  { q: 'Покажись!', cost: 20, a: (g) => { setTimeout(() => g.startEvent('stand', 4), 1200); return 'СМОТРИ'; } },
+  { q: 'Покажись!', cost: 20, a: (g, actor) => { setTimeout(() => g.startEvent('stand', 4, actorPlayer(actor)), 1200); return 'СМОТРИ'; } },
   { q: 'Прощай', cost: 0, a: () => 'ПРОЩАЙ', bye: true },
 ];
 function openBoard() {
@@ -214,74 +255,95 @@ function openBoard() {
   $('cursedText').textContent = 'Каждый вопрос отнимает рассудок. Не забудьте попрощаться.';
   const list = $('cursedBtns');
   list.innerHTML = '';
-  for (const q of QUESTIONS) {
+  QUESTIONS.forEach((q, i) => {
     const b = document.createElement('button');
     b.className = 'btn';
     b.textContent = q.q + (q.cost ? ` (−${q.cost}% рассудка)` : '');
-    b.onclick = () => askBoard(q);
+    b.onclick = () => askBoard(i);
     list.appendChild(b);
-  }
+  });
 }
 function closeCursedUI() {
   $('cursedUI').classList.add('hidden');
   if (G.uiOpen === 'cursedUI') G.uiOpen = null;
 }
-function askBoard(q) {
+function askBoard(i) {
   if (C.broken || C.busy) return;
   C.busy = true;
-  sfx.scrape(C.x, C.z);
   $('cursedText').textContent = '…указатель двигается…';
+  if (isClient()) netSend('cur', { a: 'ask', q: i });
+  else hostAsk('L', i);
+}
+// ответ доски — у того, кто спрашивал
+export function boardReply(text, close) {
+  C.busy = false;
+  $('cursedText').textContent = text;
+  if (close) setTimeout(closeCursedUI, close);
+}
+export function hostAsk(actor, i) {
+  const q = QUESTIONS[i];
+  if (!q) return;
+  if (C.broken) { reply(actor, 'Доска молчит.', 900); return; }
+  sfx.scrape(C.x, C.z);
   C.moveUntil = G.t + 2;
+  syncCursed();
   setTimeout(() => {
-    C.busy = false;
-    if (G.sanity < q.cost) {
-      $('cursedText').textContent = 'Доска треснула!';
-      setTimeout(closeCursedUI, 900);
-      curse();
+    if (actorSanity(actor) < q.cost) {
+      reply(actor, 'Доска треснула!', 900);
+      curse(); syncCursed();
       return;
     }
-    G.sanity -= q.cost;
-    $('cursedText').textContent = '«' + q.a(G.ghost) + '»';
-    if (q.bye) { C.broken = true; setTimeout(closeCursedUI, 1400); }
+    adjSanity(actor, -q.cost);
+    const ans = '«' + q.a(G.ghost, actor) + '»';
+    if (q.bye) { C.broken = true; syncCursed(); }
+    reply(actor, ans, q.bye ? 1400 : 0);
     C.uses++;
   }, 2000);
+}
+function reply(actor, text, close) {
+  if (actor === 'R') netSend('board', { t: text, c: close });
+  else boardReply(text, close);
 }
 
 // ---------- карты Таро ----------
 const CARDS = [
   { n: 'Шут', w: 20, t: 'Шут лишь смеётся над вами. Ничего не произошло.', f: () => {} },
-  { n: 'Колесо фортуны', w: 18, t: '', f: (g, card) => { const up = Math.random() < 0.5; G.sanity = Math.max(0, Math.min(100, G.sanity + (up ? 25 : -25))); card.t = up ? 'Карта горит зелёным: +25% рассудка.' : 'Карта горит красным: −25% рассудка.'; } },
+  { n: 'Колесо фортуны', w: 18, t: '', f: (g, card, actor) => { const up = Math.random() < 0.5; adjSanity(actor, up ? 25 : -25); card.t = up ? 'Карта горит зелёным: +25% рассудка.' : 'Карта горит красным: −25% рассудка.'; } },
   { n: 'Башня', w: 16, t: 'Призрак приходит в ярость и устраивает погром.', f: (g) => { for (let i = 0; i < 3; i++) setTimeout(() => g.interact(), i * 700); } },
-  { n: 'Дьявол', w: 10, t: 'Призрак является перед вами.', f: (g) => g.startEvent('walk', 3) },
+  { n: 'Дьявол', w: 10, t: 'Призрак является перед вами.', f: (g, card, actor) => g.startEvent('walk', 3, actorPlayer(actor)) },
   { n: 'Смерть', w: 9, t: 'Призрак начинает проклятую охоту!', f: () => curse() },
   { n: 'Отшельник', w: 10, t: 'Призрак возвращается в свою комнату и затихает на минуту.', f: (g) => { g.path = null; g.smudgeUntil = G.t + 60; const r = ROOMS[g.home].lights[0]; g.x = r[0]; g.z = r[1]; } },
-  { n: 'Солнце', w: 5, t: 'Рассудок полностью восстановлен.', f: () => { G.sanity = 100; } },
-  { n: 'Луна', w: 5, t: 'Рассудок упал до нуля.', f: () => { G.sanity = 0; } },
+  { n: 'Солнце', w: 5, t: 'Рассудок полностью восстановлен.', f: (g, card, actor) => setSanity(actor, 100) },
+  { n: 'Луна', w: 5, t: 'Рассудок упал до нуля.', f: (g, card, actor) => setSanity(actor, 0) },
   { n: 'Верховная жрица', w: 5, t: '', f: (g, card) => {
     const ks = Object.keys(EVIDENCE).filter(k => !g.def.ev.includes(k) && G.journal.evidence[k] !== 2);
     if (!ks.length) { card.t = 'Жрице нечего вам открыть.'; return; }
     const k = pick(ks); G.journal.evidence[k] = 2;
+    if (G.onJournal) G.onJournal();
     card.t = `Жрица вычеркнула из журнала улику: «${EVIDENCE[k].name}».`;
   } },
-  { n: 'Повешенный', w: 2, t: 'Вы чувствуете, как петля затягивается…', f: (g) => setTimeout(() => g.kill(), 1200) },
+  { n: 'Повешенный', w: 2, t: 'Вы чувствуете, как петля затягивается…', f: (g, card, actor) => setTimeout(() => g.kill(actorPlayer(actor)), 1200) },
 ];
-function drawCard() {
+function drawCard(actor = 'L') {
   if (C.cardsLeft <= 0) return;
   C.cardsLeft--;
   let r = Math.random() * CARDS.reduce((a, c) => a + c.w, 0), card = CARDS[0];
   for (const c of CARDS) { r -= c.w; if (r <= 0) { card = c; break; } }
   const shown = { ...card };
+  card.f(G.ghost, shown, actor);
+  if (actor === 'R') netSend('card', { n: shown.n, t: shown.t });
+  else showCard(shown.n, shown.t);
+  applyDeck();
+  if (C.cardsLeft <= 0) C.broken = true;
+}
+export function showCard(n, t) {
   sfx.cardFlip();
-  card.f(G.ghost, shown);
   const el = $('tarotCard');
-  el.querySelector('b').textContent = shown.n.toUpperCase();
-  el.querySelector('p').textContent = shown.t;
+  el.querySelector('b').textContent = String(n).toUpperCase();
+  el.querySelector('p').textContent = t;
   el.classList.remove('hidden');
   clearTimeout(C.cardTimer);
   C.cardTimer = setTimeout(() => el.classList.add('hidden'), 3500);
-  C.deck.scale.y = Math.max(0.1, C.cardsLeft / 10);
-  C.deck.position.y = 0.0125 * C.deck.scale.y;
-  if (C.cardsLeft <= 0) { C.broken = true; C.deck.visible = false; }
 }
 
 // ---------- обновление ----------
@@ -295,11 +357,13 @@ export function updateCursed(dt) {
   if (C.type === 'musicbox' && C.playing) {
     C.dancer.rotation.y += dt * 4;
     if (Math.hypot(p.x - C.x, p.z - C.z) < 5) G.sanity = Math.max(0, G.sanity - dt * 2);
-    if (G.t > C.playEnd) {
+    if (G.t > C.playEnd && isHost()) {
       C.playing = false;
       const gh = G.ghost;
-      if (gh.distTo(p.x, p.z) < 3 || gh.distTo(C.x, C.z) < 2.5) curse();
-      else { C.broken = true; toast('Мелодия стихла. Шкатулка сломалась.'); }
+      const near = playersList().some(q => !q.dead && gh.distTo(q.x, q.z) < 3);
+      if (near || gh.distTo(C.x, C.z) < 2.5) curse();
+      else { C.broken = true; toast('Мелодия стихла. Шкатулка сломалась.'); if (G.mp) netSend('toast', { t: 'Мелодия стихла. Шкатулка сломалась.' }); }
+      syncCursed();
     }
   }
   if (C.type === 'mirror' && C.mirrorOn) {
@@ -313,7 +377,9 @@ export function updateCursed(dt) {
     if (G.sanity <= 0) {
       C.glass.material.color.setHex(0x222222);
       toast('Зеркальце треснуло!', 3);
-      curse();
+      C.mirrorOn = false; document.body.classList.remove('mirroring');
+      if (isClient()) netSend('cur', { a: 'curse' });
+      else hostCurse();
     }
   }
 }

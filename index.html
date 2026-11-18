@@ -30,6 +30,8 @@
   </div>
   <div id="toast"></div>
   <div id="fps" class="hidden"></div>
+  <div id="mpInfo" class="hidden"></div>
+  <div id="spectFx"><span>Вы погибли · наблюдение</span></div>
   <div id="cross"></div>
   <div id="prompt"></div>
   <div id="stamina"><i></i></div>
@@ -66,6 +68,7 @@
     <div class="diffs" id="diffs"></div>
     <p class="hint diffdesc" id="diffDesc"></p>
     <button class="btn primary" id="btnStart">Начать расследование</button>
+    <button class="btn" id="btnMp">👥 Играть вдвоём</button>
     <button class="btn" id="btnHelp">Как играть</button>
     <button class="btn" id="btnLayout">Раскладка кнопок</button>
     <label class="row">Чувствительность обзора <input type="range" id="sens" min="0.4" max="2.5" step="0.1" value="1"></label>
@@ -101,6 +104,7 @@
       <li><b>Синее пламя</b> — зажгите свечу рядом с призраком: пламя станет синим. Свеча также вдвое замедляет потерю рассудка, но призрак может её задуть.</li>
       <li><b>Сложность</b> — на «Кошмаре» призрак оставляет только 2 улики, на «Безумии» — одну. Тогда отличайте призраков по поведению (описано в журнале).</li>
       <li><b>Монитор в фургоне</b> показывает рассудок и график активности призрака: чем выше пики, тем злее призрак.</li>
+      <li><b>Игра вдвоём</b> — «Играть вдвоём» в меню: один создаёт игру и называет код, второй вводит его. На claude.ai напарнику нужен доступ к странице (кнопка «Поделиться»); в HTML-файле связь идёт напрямую через интернет. Призрак охотится на того, кого заметит; погибший может бродить невидимым наблюдателем.</li>
       <li><b>Проклятый предмет</b> — в каждом доме спрятан один: говорящая доска, музыкальная шкатулка, карты Таро, зеркальце или кукла. Они подсказывают, где призрак и кто он, но отнимают рассудок и могут вызвать проклятую охоту, от которой не спасает распятие.</li>
       <li><b>Голос на диктофоне</b> — включите диктофон рядом с призраком. Если оставили его на полу — заберите, и услышите, что он записал.</li>
     </ul>
@@ -166,6 +170,26 @@
     <p id="cursedText" class="board-answer"></p>
     <div id="cursedBtns"></div>
     <button class="btn" id="cursedClose">Отойти</button>
+  </div>
+</div>
+
+<div id="mpScreen" class="screen hidden">
+  <div class="panel center">
+    <h2>Игра вдвоём</h2>
+    <p class="hint" id="mpVia"></p>
+    <label class="row">Ваше имя <input id="mpNick" maxlength="14" placeholder="Игрок" autocomplete="off"></label>
+    <div id="mpStep1">
+      <button class="btn primary" id="mpCreate">Создать игру</button>
+      <div class="mpjoin"><input id="mpCode" inputmode="numeric" maxlength="6" placeholder="Код игры" autocomplete="off"><button class="btn" id="mpJoin">Войти</button></div>
+      <div id="mpGames"></div>
+    </div>
+    <div id="mpStep2" class="hidden">
+      <p class="hint">Код игры</p>
+      <div class="bigcode" id="mpShowCode"></div>
+      <p id="mpStatus"></p>
+      <button class="btn primary hidden" id="mpGo">Начать вдвоём</button>
+    </div>
+    <button class="btn" id="mpBack">Назад</button>
   </div>
 </div>
 

@@ -371,3 +371,21 @@ input[type=checkbox] { accent-color: var(--ecto); width: 18px; height: 18px; fle
 #loading { font-family: var(--type); letter-spacing: 4px; text-transform: uppercase; color: var(--ecto); }
 
 .panel.wide::before { left: auto; right: 64px; }
+
+/* ---------- игра вдвоём ---------- */
+input[type=text], input:not([type]), #mpNick, #mpCode { user-select: text; -webkit-user-select: text; touch-action: manipulation;
+  font-family: var(--type); font-size: 16px; background: #0f0d0a; color: var(--paper); border: 1px solid var(--edge); border-radius: 4px; padding: 10px; }
+#mpNick { flex: 1; max-width: 200px; }
+.mpjoin { display: flex; gap: 8px; margin: 8px 0; }
+.mpjoin input { flex: 1; min-width: 0; letter-spacing: 4px; text-align: center; }
+.mpjoin .btn { width: auto; margin: 0; padding: 10px 18px; }
+.bigcode { font: 700 44px var(--type); letter-spacing: 10px; color: var(--ecto); text-shadow: 0 0 14px rgba(143,227,168,0.5); margin: 4px 0 8px; }
+#mpStatus { font-family: var(--type); color: var(--paper) !important; min-height: 2.6em; }
+#mpGames .btn { font-size: 12px; }
+#mpInfo { position: absolute; top: calc(max(8px, env(safe-area-inset-top)) + 44px); left: max(8px, env(safe-area-inset-left)); font: 600 12px var(--type);
+  color: var(--paper); background: rgba(14,12,9,0.7); border: 1px solid var(--edge); border-radius: 4px; padding: 4px 8px; pointer-events: none !important; }
+#spectFx { position: fixed; inset: 0; z-index: 3; pointer-events: none !important; display: none;
+  background: radial-gradient(ellipse at center, rgba(40,60,110,0.05) 40%, rgba(20,30,70,0.6) 100%); }
+#spectFx span { position: absolute; top: 18%; left: 50%; transform: translateX(-50%); font: 700 13px var(--type); letter-spacing: 3px; text-transform: uppercase; color: #a8b8e8; }
+body.spectating #spectFx { display: block; }
+body.spectating #bUse, body.spectating #bDrop, body.spectating #bAsk, body.spectating #slots, body.spectating #readout { display: none !important; }

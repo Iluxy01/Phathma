@@ -255,6 +255,7 @@ function buildDoors(scene) {
     }
     pivot.rotation.y = base;
     pivot.userData.noMerge = true;
+    pivot.userData.netRef = 'd' + i;
     const panelColor = isFront ? 0x5a2e1e : 0x7a5c3e;
     const panel = box(0.92, 2.06, 0.05, panelColor, 0.46, 1.03, 0, pivot);
     panel.userData.kind = 'door';
@@ -308,6 +309,7 @@ function makeSwitch(scene, door, room) {
     pos = [xx, 1.3, Z + off]; rotY = roomIsB ? 0 : Math.PI;
   }
   const g = new THREE.Group();
+  g.userData.netRef = 's' + room;
   g.position.set(...pos); g.rotation.y = rotY;
   const plate = box(0.1, 0.14, 0.02, 0xe8e2d0, 0, 0, 0, g);
   const tog = box(0.03, 0.05, 0.03, 0xd0c8b0, 0, 0.02, 0.015, g);
@@ -727,6 +729,10 @@ export function drawSanityBoard() {
   ctx.font = 'bold 34px monospace';
   ctx.fillStyle = !shown ? '#7a7' : s > 50 ? '#7f7' : s > 25 ? '#fd5' : '#f55';
   ctx.fillText(shown ? s + '%' : '??', 10, 64);
+  if (G.mp && G.remote && G.remote.ok) {
+    ctx.font = 'bold 12px monospace'; ctx.fillStyle = G.remote.dead ? '#f55' : '#9d9';
+    ctx.fillText(G.remote.dead ? 'НАПАРНИК: ☠' : 'НАПАРНИК: ' + (shown ? Math.round(G.remote.san) + '%' : '??'), 10, 124);
+  }
   ctx.fillStyle = '#0d2016'; ctx.fillRect(10, 80, 100, 34);
   if (shown) { ctx.fillStyle = s > 50 ? '#3c3' : s > 25 ? '#cb3' : '#c33'; ctx.fillRect(10, 80, s, 34); }
   // график активности призрака за последние 3 минуты
@@ -1093,6 +1099,7 @@ export function updateProps(dt) {
     if (solidAt(nx, m.position.z, bottom, p.r * 0.6)) { p.vx *= -0.4; nx = m.position.x; }
     if (solidAt(m.position.x, nz, bottom, p.r * 0.6)) { p.vz *= -0.4; nz = m.position.z; }
     const floor = surfaceAt(nx, nz, bottom) + p.hy;
+    p.netT = G.t;
     if (ny < floor) {
       ny = floor;
       if (p.vy < -1 && G.onPropImpact) G.onPropImpact(p, -p.vy);
@@ -1103,5 +1110,47 @@ export function updateProps(dt) {
       m.rotation.x += p.vx * dt * 3; m.rotation.z += p.vz * dt * 3;
     }
     m.position.set(nx, ny, nz);
+  }
+}
+
+// ---------- сеть: двери, свет, предметы обстановки ----------
+export function doorsState() { return doors.map(d => +d.angle.toFixed(2)); }
+export function applyDoorsState(a, lockedFront) {
+  if (!Array.isArray(a)) return;
+  const t = performance.now();
+  doors.forEach((d, i) => { if (Number.isFinite(a[i]) && !(d.predUntil > t)) { d.target = a[i]; d.speed = 6; } });
+  if (frontDoor) frontDoor.locked = !!lockedFront;
+}
+export function lightsBits() { let b = 0; HOUSE_ROOMS.forEach((r, i) => { if (G.lightsOn[r]) b |= 1 << i; }); return b; }
+export const predLight = {};
+export function applyLightsBits(b) { const t = performance.now(); HOUSE_ROOMS.forEach((r, i) => { const on = !!(b & (1 << i)); if (G.lightsOn[r] !== on && !(predLight[r] > t)) setLight(r, on); }); }
+// пропсы, которые двигались за последние 1.5 с
+export function propsState() {
+  const out = [];
+  props.forEach((p, i) => {
+    if (G.t - (p.netT || -99) > 1.5) return;
+    const m = p.mesh;
+    out.push([i, +m.position.x.toFixed(2), +m.position.y.toFixed(2), +m.position.z.toFixed(2), +m.rotation.x.toFixed(2), +m.rotation.y.toFixed(2), +m.rotation.z.toFixed(2)]);
+  });
+  return out;
+}
+export function applyPropsState(arr) {
+  if (!Array.isArray(arr)) return;
+  for (const e of arr) {
+    if (!Array.isArray(e) || e.length < 7 || !e.every(Number.isFinite)) continue;
+    const p = props[e[0]];
+    if (!p) continue;
+    p.tgt = e; p.rest = true;
+  }
+}
+// клиент: плавно подводит пропсы к положению с хоста
+export function smoothProps(dt) {
+  const k = Math.min(1, dt * 14);
+  for (const p of props) {
+    if (!p.tgt) continue;
+    const m = p.mesh, e = p.tgt;
+    m.position.x += (e[1] - m.position.x) * k; m.position.y += (e[2] - m.position.y) * k; m.position.z += (e[3] - m.position.z) * k;
+    m.rotation.set(e[4], e[5], e[6]);
+    if (Math.abs(e[1] - m.position.x) + Math.abs(e[2] - m.position.y) + Math.abs(e[3] - m.position.z) < 0.002) p.tgt = null;
   }
 }
