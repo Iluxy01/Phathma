@@ -11,12 +11,12 @@ import * as CU from './cursed.js';
 import * as AP from './appliances.js';
 import * as UI from './ui.js';
 import { sfx, playRelayed, initAudio } from './audio.js';
-import { RoomLink, PeerLink, MqttLink, getRoom, loadPeerJs, peerAvailable } from './net.js';
+import { LanLink, lanSupported } from './net.js';
 
 const $ = (id) => document.getElementById(id);
 const INTERP = 120;              // задержка интерполяции, мс
-let ctx = null, link = null, room = null, transport = null;
-let partnerNick = '', myNick = 'Игрок', listTimer = 0;
+let ctx = null, link = null;
+let partnerNick = '', myNick = 'Игрок';
 let avatar = null;
 const rbuf = [];                 // буфер состояний напарника для интерполяции
 let tBase = 0, tRecv = 0;        // синхронизация игрового времени у клиента
@@ -27,17 +27,20 @@ function saveNick(n) { try { localStorage.setItem('phathma.nick', n); } catch (_
 const now = () => performance.now();
 const fin = (v) => Number.isFinite(v);
 
-// ================= ЛОББИ =================
+// ================= ЛОББИ (Wi-Fi, обмен кодами) =================
 export function init(c) {
   ctx = c;
   $('btnMp').addEventListener('click', openLobby);
-  try { const m = localStorage.getItem('phathma.mpmode'); if (m) $('mpMode').value = m; } catch (_) { /* */ }
-  $('mpMode').addEventListener('change', () => { try { localStorage.setItem('phathma.mpmode', $('mpMode').value); } catch (_) { /* */ } if (!G.running && transport === 'net') openLobby(); });
   $('mpBack').addEventListener('click', closeLobby);
   $('mpCreate').addEventListener('click', () => { initAudio(); ctx.goFullscreen(); createGame(); });
-  $('mpJoin').addEventListener('click', () => { initAudio(); ctx.goFullscreen(); joinGame($('mpCode').value.trim()); });
+  $('mpJoinBtn').addEventListener('click', () => { initAudio(); ctx.goFullscreen(); startJoin(); });
+  $('mpApply').addEventListener('click', applyCode);
+  $('mpScan').addEventListener('click', toggleScan);
+  $('mpCopy').addEventListener('click', copyCode);
+  $('mpShare').addEventListener('click', shareCode);
   $('mpGo').addEventListener('click', hostStart);
   $('mpNick').value = loadNick();
+  if (!(typeof navigator.share === 'function')) $('mpShare').classList.add('hidden');
   // фон: если хост свернул вкладку, мир всё равно идёт (браузер будит таймер ~раз в секунду)
   let lastHidden = 0;
   setInterval(() => {
@@ -47,118 +50,141 @@ export function init(c) {
   }, 250);
 }
 
+let myCode = '', step = '';
 function setStatus(t) { $('mpStatus').textContent = t; }
-function showStep(n) { $('mpStep1').classList.toggle('hidden', n !== 1); $('mpStep2').classList.toggle('hidden', n !== 2); }
+function show(id, on) { $(id).classList.toggle('hidden', !on); }
 
-async function openLobby() {
+function openLobby() {
   UI.hide('menu'); UI.show('mpScreen'); G.uiOpen = 'mpScreen';
-  showStep(1);
-  $('mpVia').textContent = 'Проверяем, как можно подключиться…';
-  $('mpCreate').disabled = true; $('mpJoin').disabled = true;
-  if (!transport) {
-    room = await getRoom();
-    if (room) transport = 'room';
-    else if (window.claude) transport = 'noroom';   // claude.ai без доступа к общему каналу
-    else transport = 'net';   // HTML-файл / обычный сайт: сервер (MQTT) или P2P на выбор
+  resetLobby();
+  if (!lanSupported()) {
+    $('mpCreate').disabled = true; $('mpJoinBtn').disabled = true;
+    setStatus(window.claude ? 'На сайте claude.ai игра вдвоём недоступна. Скачайте HTML-файл игры и откройте его в браузере телефона.' : 'Этот браузер не поддерживает игру вдвоём. Откройте файл в Chrome или Safari.');
   }
-  if (transport === 'net') {
-    $('mpModeRow').classList.remove('hidden');
-    const mode = $('mpMode').value;
-    $('mpVia').textContent = mode === 'p2p'
-      ? 'Напрямую между устройствами (WebRTC). Быстрее, но у некоторых мобильных операторов не соединяется.'
-      : 'Через бесплатные серверы связи (сразу три, для надёжности). Работает в любой сети с интернетом.';
-    $('mpCreate').disabled = false; $('mpJoin').disabled = false;
-    return;
-  }
-  if (transport === 'room') $('mpVia').textContent = 'Связь через claude.ai. Напарнику нужен доступ к этой странице (кнопка «Поделиться»).';
-  else if (transport === 'p2p') $('mpVia').textContent = 'Прямое соединение через интернет (бесплатный сервер PeerJS). Оба игрока должны быть онлайн.';
-  else if (transport === 'noroom') { $('mpVia').textContent = 'Здесь нет доступа к общему каналу. Войдите в claude.ai как участник страницы или играйте вдвоём через HTML-файл игры.'; return; }
-  else { $('mpVia').textContent = 'Не удалось загрузить сетевой модуль. Проверьте интернет.'; return; }
-  $('mpCreate').disabled = false; $('mpJoin').disabled = false;
-  if (transport === 'room') {
-    // список открытых игр в этой комнате
-    if (!link) link = new RoomLink(room);
-    clearInterval(listTimer);
-    listTimer = setInterval(renderGames, 1000);
-    renderGames();
-  }
+}
+function resetLobby() {
+  stopScan();
+  if (link) { link.close(); link = null; }
+  G.mp = null; partnerNick = ''; myCode = ''; step = '';
+  show('mpStep1', true); show('mpShow', false); show('mpInput', false); show('mpGo', false);
+  $('mpCreate').disabled = false; $('mpJoinBtn').disabled = false;
+  $('mpPaste').value = '';
+  setStatus('');
 }
 function closeLobby() {
-  clearInterval(listTimer);
-  if (link && !G.running) { link.close(); link = null; G.mp = null; }
+  if (step) { resetLobby(); return; }   // «Назад» сначала возвращает к выбору
+  resetLobby();
   UI.hide('mpScreen'); UI.show('menu'); G.uiOpen = null;
-}
-function renderGames() {
-  const box = $('mpGames');
-  const games = link && link.listGames ? link.listGames() : [];
-  box.innerHTML = games.length ? '<p class="hint">Открытые игры:</p>' : '';
-  for (const g of games) {
-    const b = document.createElement('button');
-    b.className = 'btn';
-    b.textContent = `Войти к «${g.nick}» · код ${g.code}`;
-    b.onclick = () => { initAudio(); ctx.goFullscreen(); joinGame(g.code); };
-    box.appendChild(b);
-  }
 }
 function nickInput() {
   myNick = ($('mpNick').value || '').trim().slice(0, 14) || 'Игрок';
   saveNick(myNick);
   return myNick;
 }
-async function ensureMode() {
-  if (transport !== 'net' || $('mpMode').value !== 'p2p') return true;
-  if (await loadPeerJs()) return true;
-  toast('Не удалось загрузить модуль P2P — выберите «Через сервер»', 4);
-  return false;
-}
-// понятное описание ошибки сети
-function errText(e) {
-  const t = (e && (e.type || e.message)) || String(e);
-  const map = {
-    'server-error': 'сервер знакомства P2P не отвечает',
-    'network': 'нет связи с сервером знакомства P2P',
-    'unavailable-id': 'такой код уже занят — создайте игру ещё раз',
-    'peer-unavailable': 'игра с этим кодом не найдена',
-    'browser-incompatible': 'этот браузер не поддерживает P2P',
-    'socket-error': 'обрыв связи с сервером',
-  };
-  return map[t] || t;
-}
+function errText(e) { return (e && e.message) || String(e); }
 function newLink() {
-  if (link) { link.close(); link = null; }
-  link = transport === 'room' ? new RoomLink(room) : $('mpMode').value === 'p2p' ? new PeerLink() : new MqttLink();
-  link.on({ onPartner, onMsg, onState, onLeave, onBack, onError: (e) => setStatus('Ошибка сети: ' + errText(e) + (link && link.kind === 'p2p' ? '. Попробуйте способ «Через сервер».' : '')) });
+  if (link) link.close();
+  link = new LanLink();
+  link.on({ onPartner, onMsg, onState, onLeave, onBack, onError: (e) => setStatus('⚠ ' + errText(e)) });
+}
+
+function showCode(code, title) {
+  myCode = code;
+  $('mpShowTitle').textContent = title;
+  $('mpCodeText').value = code;
+  try {
+    const qr = window.qrcode(0, 'L');
+    qr.addData(code);
+    qr.make();
+    $('mpQr').src = qr.createDataURL(4, 2);
+    show('mpQr', true);
+  } catch (_) { show('mpQr', false); }
+  show('mpShow', true);
 }
 
 async function createGame() {
   nickInput();
-  if (!(await ensureMode())) return;
-  const code = String(Math.floor(transport === 'room' ? 1000 + Math.random() * 9000 : 100000 + Math.random() * 900000));
   newLink();
   G.mp = { role: 'host', send: (t, d) => link.send([t, d]) };
-  showStep(2);
-  $('mpShowCode').textContent = code;
-  $('mpGo').classList.add('hidden');
-  setStatus('Создаём игру…');
-  try { await link.host(code, myNick); }
-  catch (e) { setStatus('Не удалось создать игру: ' + errText(e) + (link.kind === 'p2p' ? '. Попробуйте способ «Через сервер».' : '. Попробуйте ещё раз.')); return; }
-  setStatus('Ждём напарника… Скажите ему код игры.');
+  step = 'host'; show('mpStep1', false);
+  setStatus('Готовим код подключения…');
+  try {
+    const code = await link.makeOffer(myNick);
+    showCode(code, '1. Покажите этот QR-код напарнику (или отправьте ему код)');
+    $('mpInputTitle').textContent = '2. Когда напарник покажет ответный QR — отсканируйте его (или вставьте его код)';
+    show('mpInput', true);
+    setStatus('');
+  } catch (e) { setStatus('⚠ Не удалось подготовить код: ' + errText(e)); }
 }
-
-async function joinGame(code) {
-  if (!/^\d{4,6}$/.test(code)) { toast('Введите код из 4–6 цифр'); return; }
+function startJoin() {
   nickInput();
-  if (!(await ensureMode())) return;
   newLink();
   G.mp = { role: 'client', send: (t, d) => link.send([t, d]) };
-  showStep(2);
-  $('mpShowCode').textContent = code;
-  $('mpGo').classList.add('hidden');
-  setStatus('Подключаемся…');
-  try { await link.join(code, myNick); }
-  catch (e) { setStatus('Не удалось подключиться: ' + errText(e) + (link.kind === 'p2p' ? '. Попробуйте способ «Через сервер» (оба игрока).' : '')); G.mp = null; return; }
-  setStatus('Ищем игру с этим кодом…');
-  setTimeout(() => { if (!partnerNick && G.mp && !G.running) setStatus('Игра не найдена. Проверьте код и что у обоих выбран один способ связи. Хост должен держать экран лобби открытым.'); }, 15000);
+  step = 'client'; show('mpStep1', false);
+  $('mpInputTitle').textContent = '1. Отсканируйте QR-код хоста (или вставьте его код)';
+  show('mpInput', true);
+  setStatus('');
+}
+async function applyCode() {
+  const code = $('mpPaste').value.trim();
+  if (!code) { setStatus('Вставьте код или отсканируйте QR'); return; }
+  stopScan();
+  try {
+    if (step === 'host') {
+      setStatus('Соединяемся…');
+      await link.acceptAnswer(code);
+      setTimeout(() => { if (!partnerNick && step === 'host') setStatus('⚠ Не удаётся соединиться. Проверьте, что оба телефона в одной сети Wi-Fi, и начните заново (кнопка «Назад»).'); }, 12000);
+    } else if (step === 'client') {
+      setStatus('Готовим ответ…');
+      const ans = await link.acceptOffer(code, myNick);
+      show('mpInput', false);
+      showCode(ans, '2. Покажите этот ответный QR-код хосту (или отправьте ему код)');
+      setStatus('Ждём, когда хост отсканирует ответ…');
+      setTimeout(() => { if (!partnerNick && step === 'client') setStatus('⚠ Пока не соединились. Убедитесь, что хост ввёл ответ и что вы в одной сети Wi-Fi.'); }, 25000);
+    }
+  } catch (e) { setStatus('⚠ ' + errText(e)); }
+}
+async function copyCode() {
+  try { await navigator.clipboard.writeText(myCode); setStatus('Код скопирован — отправьте его напарнику'); }
+  catch (_) { const t = $('mpCodeText'); t.classList.remove('hidden'); t.focus(); t.select(); setStatus('Выделите и скопируйте код из поля ниже'); }
+}
+async function shareCode() {
+  try { await navigator.share({ text: myCode }); } catch (_) { /* отменено */ }
+}
+
+// сканирование QR камерой (где браузер это умеет)
+let scan = null;
+async function toggleScan() {
+  if (scan) { stopScan(); return; }
+  if (!('BarcodeDetector' in window) || !navigator.mediaDevices) {
+    setStatus('Этот браузер не умеет сканировать QR. Откройте камеру телефона, наведите на QR, скопируйте текст и вставьте его в поле.');
+    return;
+  }
+  try {
+    const det = new window.BarcodeDetector({ formats: ['qr_code'] });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    const v = $('mpVideo');
+    v.srcObject = stream; show('mpVideo', true); await v.play();
+    scan = { stream, timer: setInterval(async () => {
+      try {
+        const r = await det.detect(v);
+        const hit = r.find(x => x.rawValue && x.rawValue.includes('PH3'));
+        if (hit) { $('mpPaste').value = hit.rawValue; stopScan(); applyCode(); }
+      } catch (_) { /* */ }
+    }, 250) };
+    $('mpScan').textContent = '✕ Остановить камеру';
+  } catch (e) {
+    stopScan();
+    setStatus('Камера недоступна. Вставьте код вручную (его можно отправить через мессенджер).');
+  }
+}
+function stopScan() {
+  if (!scan) return;
+  clearInterval(scan.timer);
+  scan.stream.getTracks().forEach(t => t.stop());
+  scan = null;
+  show('mpVideo', false);
+  $('mpScan').textContent = '📷 Сканировать QR';
 }
 
 function onPartner(nick) {
@@ -178,7 +204,7 @@ function hostStart() {
   const seed = (Math.random() * 2 ** 31) | 0;
   link.send(['init', { seed, diff: G.diffKey, n: myNick }]);
   if (link.setOpen) link.setOpen(false);
-  clearInterval(listTimer);
+  stopScan();
   ctx.startGame({ seed, diffKey: G.diffKey, role: 'host' });
 }
 
@@ -189,17 +215,10 @@ function onLeave() {
     $('mpGo').classList.add('hidden');
     return;
   }
-  // связь пропала: ждём до 60 с, вдруг вернётся (сворачивали приложение, плохая сеть)
-  if (lostTimer) return;
-  if (G.remote) G.remote.ok = false;
-  if (avatar) avatar.group.visible = false;
-  toast(isHost() ? 'Связь с напарником прервалась — ждём переподключения…' : 'Связь с хостом прервалась — ждём переподключения…', 6);
-  lostTimer = setTimeout(() => {
-    lostTimer = 0;
-    if (!G.running) return;
-    if (isHost()) toast('Напарник так и не вернулся. Можно продолжать одному.', 5);
-    else ctx.endGame('Связь с хостом потеряна — игра прервана.');
-  }, 60000);
+  if (G.remote) { G.remote.ok = false; G.remote.dead = true; }
+  if (avatar) { avatar.group.visible = false; avatar.spot.intensity = 0; }
+  if (isHost()) toast('Напарник отключился. Можно продолжать одному.', 5);
+  else ctx.endGame('Связь с хостом потеряна — игра прервана.');
 }
 let lostTimer = 0;
 function onBack() {
@@ -210,7 +229,7 @@ function onBack() {
 
 // ================= ИГРА =================
 export function onGameStart(role) {
-  clearInterval(listTimer);
+  stopScan();
   G.mp.role = role;
   G.mp.partnerNick = partnerNick;
   G.onJournal = () => netSend('jr', { ev: G.journal.evidence, g: G.journal.guess });
@@ -302,7 +321,7 @@ export function syncTime() {
 }
 export function renderAt() { return now() - interp(); }
 // через серверы снимки приходят 10 раз в секунду — смотрим чуть дальше в прошлое
-function interp() { return link && link.kind === 'mqtt' ? 220 : INTERP; }
+function interp() { return INTERP; }
 
 // ---------- сообщения ----------
 function onMsg(m) {
@@ -441,10 +460,9 @@ function buildAvatar() {
   add(new THREE.BoxGeometry(0.08, 0.5, 0.08), coat, 0, -0.22, -0.08, arm).rotation.x = 0.6;
   add(new THREE.BoxGeometry(0.08, 0.5, 0.08), coat, -0.48, -0.25, 0);
   const hand = new THREE.Group(); hand.position.set(0, -0.42, -0.3); arm.add(hand);
-  // фонарь напарника — постоянный источник (число источников не меняется)
-  const spot = new THREE.SpotLight(0xfff2dc, 0, 16, 0.5, 0.5, 1.2);
-  spot.position.set(0, 0.02, -0.12); head.add(spot);
-  spot.target.position.set(0, -0.3, -4); head.add(spot.target);
+  // фонарь напарника: источник создан при загрузке и всегда в сцене — иначе при появлении
+  // напарника телефон пересобирал бы все шейдеры (зависание/вылет)
+  const spot = ctx.partnerSpot;
   const tag = nameTag(partnerNick || 'Напарник'); tag.position.set(0, 1.95, 0); g.add(tag);
   g.visible = false;
   g.traverse(o => { o.userData.noMerge = true; });
@@ -477,6 +495,11 @@ function updateAvatar(dt) {
   g.rotation.y = yaw;
   avatar.head.rotation.x = pitch;
   avatar.spot.intensity = r.fl ? 22 : 0;
+  {
+    const cp = Math.cos(pitch);
+    avatar.spot.position.set(x - Math.sin(yaw) * 0.15, 1.57, z - Math.cos(yaw) * 0.15);
+    avatar.spot.target.position.set(x - Math.sin(yaw) * cp * 4, 1.57 + Math.sin(pitch) * 4 - 0.3, z - Math.cos(yaw) * cp * 4);
+  }
   // предмет в руке
   if (r.h !== avatar.heldType) {
     if (avatar.held) avatar.hand.remove(avatar.held);

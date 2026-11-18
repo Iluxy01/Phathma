@@ -13,6 +13,22 @@ import { view, toLogical, deltaLogical, initScreen, setOrient, openLayoutEditor,
 
 const $ = (id) => document.getElementById(id);
 
+// ошибки показываем прямо на экране (видно на телефоне, можно прислать текст)
+const shownErr = new Set();
+window.__reportError = (e) => {
+  const msg = (e && (e.message || e.reason && e.reason.message)) || String(e);
+  const where = (e && e.stack || '').split('\n')[1] || '';
+  const key = msg + where;
+  if (shownErr.has(key) || shownErr.size > 4) return;
+  shownErr.add(key);
+  const box = document.getElementById('errBox');
+  if (!box) return;
+  box.classList.remove('hidden');
+  box.textContent += (box.textContent ? '\n' : '') + '⚠ ' + msg + (where ? ' (' + where.trim().slice(0, 90) + ')' : '');
+};
+window.addEventListener('error', (e) => window.__reportError(e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => window.__reportError(e.reason));
+
 // ---------- рендер ----------
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -43,6 +59,11 @@ uvLight.target.position.set(0, -0.1, -4);
 camera.add(uvLight, uvLight.target);
 const photoLight = new THREE.PointLight(0xffffff, 0, 12, 1.2);
 camera.add(photoLight);
+// фонарь напарника (в игре вдвоём). Есть всегда, даже в одиночной игре: число источников света
+// не должно меняться во время игры — иначе пересобираются все шейдеры.
+const partnerSpot = new THREE.SpotLight(0xfff2dc, 0, 16, 0.5, 0.5, 1.2);
+partnerSpot.position.set(8.5, -10, 8);
+scene.add(partnerSpot, partnerSpot.target);
 
 // Общее «зерно» случайности: у всех игроков дом, мебель и предметы получаются одинаковыми.
 function mulberry32(a) {
@@ -598,7 +619,7 @@ function resume() {
 }
 
 UI.initUI({ pause, resume, leave });
-MP.init({ scene, camera, startGame, endGame, toggleDoor, toggleSwitch, toggleFuse, goFullscreen, stepGame });
+MP.init({ scene, camera, partnerSpot, startGame, endGame, toggleDoor, toggleSwitch, toggleFuse, goFullscreen, stepGame });
 
 // ---------- старт ----------
 $('sens').value = G.settings.sens;
@@ -708,8 +729,8 @@ function frame(now) {
   // в меню и на паузе картинка не меняется — не тратим батарею
   if ((!G.running || G.paused) && deathT < 0 && rendered && !G.needRender) return;
   rendered = true; G.needRender = false;
-  stepGame(dt);
-  renderFrame(dt);
+  try { stepGame(dt); } catch (e) { console.error(e); window.__reportError(e); }
+  try { renderFrame(dt); } catch (e) { console.error(e); window.__reportError(e); }
 }
 function stepGame(dt) {
   if (G.running && !G.paused) {

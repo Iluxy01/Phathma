@@ -389,3 +389,11 @@ input[type=text], input:not([type]), #mpNick, #mpCode { user-select: text; -webk
 #spectFx span { position: absolute; top: 18%; left: 50%; transform: translateX(-50%); font: 700 13px var(--type); letter-spacing: 3px; text-transform: uppercase; color: #a8b8e8; }
 body.spectating #spectFx { display: block; }
 body.spectating #bUse, body.spectating #bDrop, body.spectating #bAsk, body.spectating #slots, body.spectating #readout { display: none !important; }
+
+.qr { display: block; width: min(260px, 70vmin); height: auto; margin: 6px auto; image-rendering: pixelated; background: #fff; border: 6px solid #fff; border-radius: 4px; }
+.mpstep { font-family: var(--type); color: var(--paper) !important; font-size: 13px !important; margin: 10px 0 4px; }
+.mprow { display: flex; gap: 8px; }
+.mprow .btn { margin: 4px 0; font-size: 12px; }
+#mpPaste, #mpCodeText { width: 100%; font: 12px var(--type); background: #0f0d0a; color: var(--paper); border: 1px solid var(--edge); border-radius: 4px; padding: 8px; resize: none; user-select: text; -webkit-user-select: text; touch-action: manipulation; }
+#mpVideo { width: 100%; max-height: 40vh; border-radius: 4px; background: #000; margin: 6px 0; }
+#errBox { position: fixed; left: 8px; bottom: 8px; z-index: 200; max-width: min(520px, 90vw); background: rgba(120,20,20,0.92); color: #fff; font: 11px ui-monospace, monospace; padding: 6px 8px; border-radius: 4px; pointer-events: auto; white-space: pre-wrap; }
