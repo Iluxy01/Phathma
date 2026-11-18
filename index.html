@@ -104,7 +104,7 @@
       <li><b>Синее пламя</b> — зажгите свечу рядом с призраком: пламя станет синим. Свеча также вдвое замедляет потерю рассудка, но призрак может её задуть.</li>
       <li><b>Сложность</b> — на «Кошмаре» призрак оставляет только 2 улики, на «Безумии» — одну. Тогда отличайте призраков по поведению (описано в журнале).</li>
       <li><b>Монитор в фургоне</b> показывает рассудок и график активности призрака: чем выше пики, тем злее призрак.</li>
-      <li><b>Игра вдвоём</b> — по одной сети Wi-Fi, без интернета: «Играть вдвоём» → один создаёт игру и показывает QR-код, второй его сканирует (или вставляет код) и показывает свой ответный QR хосту. Призрак охотится на того, кого заметит; погибший может бродить невидимым наблюдателем.</li>
+      <li><b>Игра вдвоём</b> — «Играть вдвоём»: один нажимает «Создать игру» и называет 4 цифры, второй вводит их и нажимает «Войти». Нужен интернет; в одной сети Wi-Fi телефоны соединяются напрямую. Призрак охотится на того, кого заметит; погибший может бродить невидимым наблюдателем.</li>
       <li><b>Проклятый предмет</b> — в каждом доме спрятан один: говорящая доска, музыкальная шкатулка, карты Таро, зеркальце или кукла. Они подсказывают, где призрак и кто он, но отнимают рассудок и могут вызвать проклятую охоту, от которой не спасает распятие.</li>
       <li><b>Голос на диктофоне</b> — включите диктофон рядом с призраком. Если оставили его на полу — заберите, и услышите, что он записал.</li>
     </ul>
@@ -175,25 +175,16 @@
 
 <div id="mpScreen" class="screen hidden">
   <div class="panel center scroll">
-    <h2>Игра вдвоём по Wi-Fi</h2>
-    <p class="hint">Оба телефона — в одной сети Wi-Fi (или один раздаёт точку доступа, а второй к ней подключён). Интернет не нужен. У обоих должен быть один и тот же файл игры.</p>
+    <h2>Игра вдвоём</h2>
+    <p class="hint">Нужен интернет у обоих (Wi-Fi или мобильный). Если телефоны в одной сети Wi-Fi, они соединятся напрямую — так быстрее. У обоих должен быть один и тот же файл игры.</p>
     <label class="row">Ваше имя <input id="mpNick" maxlength="14" placeholder="Игрок" autocomplete="off"></label>
     <div id="mpStep1">
       <button class="btn primary" id="mpCreate">Создать игру</button>
-      <button class="btn" id="mpJoinBtn">Присоединиться</button>
+      <div class="mpjoin"><input id="mpCode" inputmode="numeric" maxlength="4" placeholder="Код" autocomplete="off"><button class="btn" id="mpJoin">Войти</button></div>
     </div>
-    <div id="mpShow" class="hidden">
-      <p class="mpstep" id="mpShowTitle"></p>
-      <img id="mpQr" class="qr" alt="QR-код подключения">
-      <div class="mprow"><button class="btn" id="mpCopy">Скопировать код</button><button class="btn" id="mpShare">Отправить…</button></div>
-      <textarea id="mpCodeText" class="hidden" rows="3" readonly></textarea>
-    </div>
-    <div id="mpInput" class="hidden">
-      <p class="mpstep" id="mpInputTitle"></p>
-      <button class="btn" id="mpScan">📷 Сканировать QR</button>
-      <video id="mpVideo" class="hidden" playsinline muted></video>
-      <textarea id="mpPaste" rows="3" placeholder="…или вставьте код сюда" autocomplete="off"></textarea>
-      <button class="btn primary" id="mpApply">Подключить</button>
+    <div id="mpStep2" class="hidden">
+      <p class="hint">Код игры</p>
+      <div class="bigcode" id="mpShowCode"></div>
     </div>
     <p id="mpStatus"></p>
     <button class="btn primary hidden" id="mpGo">Начать вдвоём</button>
@@ -208,7 +199,6 @@
 <div id="loading">Загрузка…</div>
 <div id="errBox" class="hidden"></div>
 </div>
-<script src="lib/qrcode.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

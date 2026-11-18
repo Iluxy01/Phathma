@@ -11,7 +11,7 @@ import * as CU from './cursed.js';
 import * as AP from './appliances.js';
 import * as UI from './ui.js';
 import { sfx, playRelayed, initAudio } from './audio.js';
-import { LanLink, lanSupported } from './net.js';
+import { Link, netSupported } from './net.js';
 
 const $ = (id) => document.getElementById(id);
 const INTERP = 120;              // задержка интерполяции, мс
@@ -27,20 +27,15 @@ function saveNick(n) { try { localStorage.setItem('phathma.nick', n); } catch (_
 const now = () => performance.now();
 const fin = (v) => Number.isFinite(v);
 
-// ================= ЛОББИ (Wi-Fi, обмен кодами) =================
+// ================= ЛОББИ: код из 4 цифр =================
 export function init(c) {
   ctx = c;
   $('btnMp').addEventListener('click', openLobby);
   $('mpBack').addEventListener('click', closeLobby);
   $('mpCreate').addEventListener('click', () => { initAudio(); ctx.goFullscreen(); createGame(); });
-  $('mpJoinBtn').addEventListener('click', () => { initAudio(); ctx.goFullscreen(); startJoin(); });
-  $('mpApply').addEventListener('click', applyCode);
-  $('mpScan').addEventListener('click', toggleScan);
-  $('mpCopy').addEventListener('click', copyCode);
-  $('mpShare').addEventListener('click', shareCode);
+  $('mpJoin').addEventListener('click', () => { initAudio(); ctx.goFullscreen(); joinGame($('mpCode').value.trim()); });
   $('mpGo').addEventListener('click', hostStart);
   $('mpNick').value = loadNick();
-  if (!(typeof navigator.share === 'function')) $('mpShare').classList.add('hidden');
   // фон: если хост свернул вкладку, мир всё равно идёт (браузер будит таймер ~раз в секунду)
   let lastHidden = 0;
   setInterval(() => {
@@ -50,25 +45,23 @@ export function init(c) {
   }, 250);
 }
 
-let myCode = '', step = '';
+let step = '';
 function setStatus(t) { $('mpStatus').textContent = t; }
 function show(id, on) { $(id).classList.toggle('hidden', !on); }
 
 function openLobby() {
   UI.hide('menu'); UI.show('mpScreen'); G.uiOpen = 'mpScreen';
   resetLobby();
-  if (!lanSupported()) {
-    $('mpCreate').disabled = true; $('mpJoinBtn').disabled = true;
+  if (!netSupported()) {
+    $('mpCreate').disabled = true; $('mpJoin').disabled = true;
     setStatus(window.claude ? 'На сайте claude.ai игра вдвоём недоступна. Скачайте HTML-файл игры и откройте его в браузере телефона.' : 'Этот браузер не поддерживает игру вдвоём. Откройте файл в Chrome или Safari.');
   }
 }
 function resetLobby() {
-  stopScan();
   if (link) { link.close(); link = null; }
-  G.mp = null; partnerNick = ''; myCode = ''; step = '';
-  show('mpStep1', true); show('mpShow', false); show('mpInput', false); show('mpGo', false);
-  $('mpCreate').disabled = false; $('mpJoinBtn').disabled = false;
-  $('mpPaste').value = '';
+  G.mp = null; partnerNick = ''; step = '';
+  show('mpStep1', true); show('mpStep2', false); show('mpGo', false);
+  $('mpCreate').disabled = false; $('mpJoin').disabled = false;
   setStatus('');
 }
 function closeLobby() {
@@ -81,110 +74,40 @@ function nickInput() {
   saveNick(myNick);
   return myNick;
 }
-function errText(e) { return (e && e.message) || String(e); }
+function errText(e) { return (e && (e.message || e.type)) || String(e); }
 function newLink() {
   if (link) link.close();
-  link = new LanLink();
-  link.on({ onPartner, onMsg, onState, onLeave, onBack, onError: (e) => setStatus('⚠ ' + errText(e)) });
-}
-
-function showCode(code, title) {
-  myCode = code;
-  $('mpShowTitle').textContent = title;
-  $('mpCodeText').value = code;
-  try {
-    const qr = window.qrcode(0, 'L');
-    qr.addData(code);
-    qr.make();
-    $('mpQr').src = qr.createDataURL(4, 2);
-    show('mpQr', true);
-  } catch (_) { show('mpQr', false); }
-  show('mpShow', true);
+  link = new Link();
+  link.on({ onPartner, onMsg, onState, onLeave, onBack, onError: (e) => setStatus('⚠ ' + errText(e)),
+    onDirect: (on) => { G.mpDirect = on; if (G.running) updateInfo(); } });
 }
 
 async function createGame() {
   nickInput();
+  const code = String(1000 + Math.floor(Math.random() * 9000));
   newLink();
   G.mp = { role: 'host', send: (t, d) => link.send([t, d]) };
-  step = 'host'; show('mpStep1', false);
-  setStatus('Готовим код подключения…');
-  try {
-    const code = await link.makeOffer(myNick);
-    showCode(code, '1. Покажите этот QR-код напарнику (или отправьте ему код)');
-    $('mpInputTitle').textContent = '2. Когда напарник покажет ответный QR — отсканируйте его (или вставьте его код)';
-    show('mpInput', true);
-    setStatus('');
-  } catch (e) { setStatus('⚠ Не удалось подготовить код: ' + errText(e)); }
+  step = 'host';
+  show('mpStep1', false); show('mpStep2', true);
+  $('mpShowCode').textContent = code;
+  setStatus('Подключаемся…');
+  try { await link.host(code, myNick); }
+  catch (e) { setStatus('⚠ Не удалось создать игру: ' + errText(e)); return; }
+  setStatus('Скажите напарнику код — пусть введёт его у себя и нажмёт «Войти».');
 }
-function startJoin() {
+
+async function joinGame(code) {
+  if (!/^\d{4}$/.test(code)) { setStatus('Введите код из 4 цифр с экрана напарника'); return; }
   nickInput();
   newLink();
   G.mp = { role: 'client', send: (t, d) => link.send([t, d]) };
-  step = 'client'; show('mpStep1', false);
-  $('mpInputTitle').textContent = '1. Отсканируйте QR-код хоста (или вставьте его код)';
-  show('mpInput', true);
-  setStatus('');
-}
-async function applyCode() {
-  const code = $('mpPaste').value.trim();
-  if (!code) { setStatus('Вставьте код или отсканируйте QR'); return; }
-  stopScan();
-  try {
-    if (step === 'host') {
-      setStatus('Соединяемся…');
-      await link.acceptAnswer(code);
-      setTimeout(() => { if (!partnerNick && step === 'host') setStatus('⚠ Не удаётся соединиться. Проверьте, что оба телефона в одной сети Wi-Fi, и начните заново (кнопка «Назад»).'); }, 12000);
-    } else if (step === 'client') {
-      setStatus('Готовим ответ…');
-      const ans = await link.acceptOffer(code, myNick);
-      show('mpInput', false);
-      showCode(ans, '2. Покажите этот ответный QR-код хосту (или отправьте ему код)');
-      setStatus('Ждём, когда хост отсканирует ответ…');
-      setTimeout(() => { if (!partnerNick && step === 'client') setStatus('⚠ Пока не соединились. Убедитесь, что хост ввёл ответ и что вы в одной сети Wi-Fi.'); }, 25000);
-    }
-  } catch (e) { setStatus('⚠ ' + errText(e)); }
-}
-async function copyCode() {
-  try { await navigator.clipboard.writeText(myCode); setStatus('Код скопирован — отправьте его напарнику'); }
-  catch (_) { const t = $('mpCodeText'); t.classList.remove('hidden'); t.focus(); t.select(); setStatus('Выделите и скопируйте код из поля ниже'); }
-}
-async function shareCode() {
-  try { await navigator.share({ text: myCode }); } catch (_) { /* отменено */ }
-}
-
-// сканирование QR камерой (где браузер это умеет)
-let scan = null;
-async function toggleScan() {
-  if (scan) { stopScan(); return; }
-  if (!('BarcodeDetector' in window) || !navigator.mediaDevices) {
-    setStatus('Этот браузер не умеет сканировать QR. Откройте камеру телефона, наведите на QR, скопируйте текст и вставьте его в поле.');
-    return;
-  }
-  try {
-    const det = new window.BarcodeDetector({ formats: ['qr_code'] });
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    const v = $('mpVideo');
-    v.srcObject = stream; show('mpVideo', true); await v.play();
-    scan = { stream, timer: setInterval(async () => {
-      try {
-        const r = await det.detect(v);
-        const hit = r.find(x => x.rawValue && x.rawValue.includes('PH3'));
-        if (hit) { $('mpPaste').value = hit.rawValue; stopScan(); applyCode(); }
-      } catch (_) { /* */ }
-    }, 250) };
-    $('mpScan').textContent = '✕ Остановить камеру';
-  } catch (e) {
-    stopScan();
-    setStatus('Камера недоступна. Вставьте код вручную (его можно отправить через мессенджер).');
-  }
-}
-function stopScan() {
-  if (!scan) return;
-  clearInterval(scan.timer);
-  scan.stream.getTracks().forEach(t => t.stop());
-  scan = null;
-  show('mpVideo', false);
-  $('mpScan').textContent = '📷 Сканировать QR';
+  step = 'client';
+  show('mpStep1', false); show('mpStep2', true);
+  $('mpShowCode').textContent = code;
+  setStatus('Ищем игру…');
+  try { await link.join(code, myNick); }
+  catch (e) { setStatus('⚠ Не удалось подключиться: ' + errText(e)); G.mp = null; return; }
+  setTimeout(() => { if (!partnerNick && step === 'client') setStatus('Игра не найдена. Проверьте код, интернет у обоих и что хост не закрыл экран с кодом.'); }, 15000);
 }
 
 function onPartner(nick) {
@@ -204,7 +127,6 @@ function hostStart() {
   const seed = (Math.random() * 2 ** 31) | 0;
   link.send(['init', { seed, diff: G.diffKey, n: myNick }]);
   if (link.setOpen) link.setOpen(false);
-  stopScan();
   ctx.startGame({ seed, diffKey: G.diffKey, role: 'host' });
 }
 
@@ -215,10 +137,17 @@ function onLeave() {
     $('mpGo').classList.add('hidden');
     return;
   }
-  if (G.remote) { G.remote.ok = false; G.remote.dead = true; }
+  // связь пропала: ждём до 60 с, вдруг вернётся (свернули приложение, плохая сеть)
+  if (lostTimer) return;
+  if (G.remote) G.remote.ok = false;
   if (avatar) { avatar.group.visible = false; avatar.spot.intensity = 0; }
-  if (isHost()) toast('Напарник отключился. Можно продолжать одному.', 5);
-  else ctx.endGame('Связь с хостом потеряна — игра прервана.');
+  toast(isHost() ? 'Связь с напарником прервалась — ждём переподключения…' : 'Связь с хостом прервалась — ждём переподключения…', 6);
+  lostTimer = setTimeout(() => {
+    lostTimer = 0;
+    if (!G.running) return;
+    if (isHost()) { if (G.remote) G.remote.dead = true; toast('Напарник так и не вернулся. Можно продолжать одному.', 5); }
+    else ctx.endGame('Связь с хостом потеряна — игра прервана.');
+  }, 60000);
 }
 let lostTimer = 0;
 function onBack() {
@@ -229,7 +158,6 @@ function onBack() {
 
 // ================= ИГРА =================
 export function onGameStart(role) {
-  stopScan();
   G.mp.role = role;
   G.mp.partnerNick = partnerNick;
   G.onJournal = () => netSend('jr', { ev: G.journal.evidence, g: G.journal.guess });
@@ -523,7 +451,7 @@ function updateInfo() {
   const el = $('mpInfo');
   if (!r || !r.ok) { el.textContent = '👤 нет связи'; return; }
   const where = r.dead ? '☠ погиб' : r.hid >= 0 ? 'прячется' : r.inHouse ? 'в доме' : W.inVanArea(r.x, r.z) ? 'в фургоне' : 'на улице';
-  el.textContent = `👤 ${r.n || partnerNick} · ${where}`;
+  el.textContent = `👤 ${r.n || partnerNick} · ${where} · ${G.mpDirect ? '📶 напрямую' : '🌐 через сервер'}`;
 }
 
 // каждый шаг игры
